@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Venture Events Admin Features
- * Version: 0.9.6
+ * Version: 0.9.8
  */
 
 // Load WP_List_Table safely (only when needed)
@@ -45,11 +45,23 @@ function ve_event_list_column_content($column, $post_id) {
     if ($column !== 've_shortcode') {
         return;
     }
-    $shortcode = sprintf('[venture_registration event_id="%d"]', (int) $post_id);
+    $id = (int) $post_id;
+    $normal = sprintf('[venture_registration event_id="%d"]', $id);
     printf(
-        '<code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code>',
-        esc_html($shortcode)
+        '<div><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code></div>',
+        esc_html($normal)
     );
+
+    $special_tiers = function_exists('ve_get_special_tiers')
+        ? ve_get_special_tiers($id)
+        : (get_post_meta($id, '_ve_special_tiers', true) ?: []);
+    if (!empty($special_tiers) && is_array($special_tiers)) {
+        $special = sprintf('[venture_registration event_id="S%d"]', $id);
+        printf(
+            '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">special</span></div>',
+            esc_html($special)
+        );
+    }
 }
 
 // ====================== TIERS META BOX ======================
@@ -158,15 +170,213 @@ function ve_save_tiers_meta($post_id) {
     update_post_meta($post_id, '_ve_tiers', $tiers);
 }
 
+// ====================== SPECIAL EVENT TICKET TIERS META BOX ======================
+add_action('add_meta_boxes', 've_add_special_tiers_meta_box');
+function ve_add_special_tiers_meta_box() {
+    add_meta_box(
+        've_special_tiers_meta',
+        'Special Event Ticket Tiers',
+        've_special_tiers_meta_box_html',
+        've_event',
+        'normal',
+        'high'
+    );
+}
 
+function ve_special_tiers_meta_box_html($post) {
+    $special = get_post_meta($post->ID, '_ve_special_tiers', true) ?: [];
+    $tiers   = get_post_meta($post->ID, '_ve_tiers', true) ?: [];
+    if (!is_array($special)) {
+        $special = [];
+    }
+    if (!is_array($tiers)) {
+        $tiers = [];
+    }
 
-// ====================== GUEST LIST PAGE (your preferred layout) ======================
+    wp_nonce_field('ve_save_special_tiers', 've_special_tiers_nonce');
+    ?>
+    <p class="description" style="margin-bottom:12px;">
+        Packages such as tables or exhibition stands. Each package can include a fixed number of free tickets
+        (tier chosen here — buyers cannot change it). Use shortcode
+        <code>[venture_registration event_id="S<?php echo (int) $post->ID; ?>"]</code> on a separate page.
+        Save normal <strong>Event Ticket Tiers</strong> first if you need to pick an included free ticket tier.
+    </p>
+
+    <div id="ve-special-tiers-wrapper">
+        <?php foreach ($special as $key => $tier): ?>
+            <?php
+            $name          = esc_attr($tier['name'] ?? '');
+            $price         = esc_attr($tier['price'] ?? '');
+            $free_tickets  = (int) ($tier['free_tickets'] ?? 0);
+            $free_tier_key = (string) ($tier['free_tier_key'] ?? '');
+            ?>
+            <div class="ve-special-tier-row" style="border:1px solid #ddd; padding:12px; margin-bottom:10px; background:#fafafa;">
+                <p style="margin:0 0 8px;">
+                    <label>Package name<br>
+                        <input type="text" name="ve_special_tiers[<?php echo esc_attr($key); ?>][name]"
+                               value="<?php echo $name; ?>" style="width:100%; max-width:420px;"
+                               placeholder="e.g. Village Table, Medium Exhibition Space">
+                    </label>
+                </p>
+                <p style="margin:0 0 8px; display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+                    <label>Price (N$)<br>
+                        <input type="number" name="ve_special_tiers[<?php echo esc_attr($key); ?>][price]"
+                               value="<?php echo $price; ?>" step="0.01" min="0.01" style="width:120px;">
+                    </label>
+                    <label>Free tickets included<br>
+                        <input type="number" name="ve_special_tiers[<?php echo esc_attr($key); ?>][free_tickets]"
+                               value="<?php echo esc_attr($free_tickets); ?>" step="1" min="0" style="width:100px;">
+                    </label>
+                    <label>Free ticket tier<br>
+                        <select name="ve_special_tiers[<?php echo esc_attr($key); ?>][free_tier_key]" style="min-width:180px;">
+                            <option value="">— Select tier —</option>
+                            <?php foreach ($tiers as $tkey => $t): ?>
+                                <option value="<?php echo esc_attr($tkey); ?>" <?php selected($free_tier_key, (string) $tkey); ?>>
+                                    <?php echo esc_html($t['name'] ?? $tkey); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <button type="button" class="button ve-remove-special-tier">Remove</button>
+                </p>
+                <p class="description" style="margin:0;">If free tickets is 0, the free ticket tier is not used.</p>
+            </div>
+        <?php endforeach; ?>
+    </div>
+
+    <button type="button" id="ve-add-special-tier" class="button">+ Add Special Tier</button>
+
+    <script type="text/html" id="ve-special-tier-template">
+        <div class="ve-special-tier-row" style="border:1px solid #ddd; padding:12px; margin-bottom:10px; background:#fafafa;">
+            <p style="margin:0 0 8px;">
+                <label>Package name<br>
+                    <input type="text" name="ve_special_tiers[__KEY__][name]" value="" style="width:100%; max-width:420px;"
+                           placeholder="e.g. Village Table, Medium Exhibition Space">
+                </label>
+            </p>
+            <p style="margin:0 0 8px; display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+                <label>Price (N$)<br>
+                    <input type="number" name="ve_special_tiers[__KEY__][price]" value="" step="0.01" min="0.01" style="width:120px;" placeholder="0.00">
+                </label>
+                <label>Free tickets included<br>
+                    <input type="number" name="ve_special_tiers[__KEY__][free_tickets]" value="0" step="1" min="0" style="width:100px;">
+                </label>
+                <label>Free ticket tier<br>
+                    <select name="ve_special_tiers[__KEY__][free_tier_key]" style="min-width:180px;">
+                        <option value="">— Select tier —</option>
+                        <?php foreach ($tiers as $tkey => $t): ?>
+                            <option value="<?php echo esc_attr($tkey); ?>">
+                                <?php echo esc_html($t['name'] ?? $tkey); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <button type="button" class="button ve-remove-special-tier">Remove</button>
+            </p>
+            <p class="description" style="margin:0;">If free tickets is 0, the free ticket tier is not used.</p>
+        </div>
+    </script>
+
+    <script>
+    jQuery(document).ready(function($) {
+        let count = Date.now();
+        $('#ve-add-special-tier').on('click', function() {
+            count++;
+            const key = 'new' + count;
+            let html = $('#ve-special-tier-template').html().replace(/__KEY__/g, key);
+            $('#ve-special-tiers-wrapper').append(html);
+        });
+        $(document).on('click', '.ve-remove-special-tier', function() {
+            $(this).closest('.ve-special-tier-row').remove();
+        });
+    });
+    </script>
+    <?php
+}
+
+add_action('save_post_ve_event', 've_save_special_tiers_meta', 20);
+function ve_save_special_tiers_meta($post_id) {
+    if (!isset($_POST['ve_special_tiers_nonce']) || !wp_verify_nonce($_POST['ve_special_tiers_nonce'], 've_save_special_tiers')) {
+        return;
+    }
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+        return;
+    }
+    if (!current_user_can('edit_post', $post_id)) {
+        return;
+    }
+
+    $previous = get_post_meta($post_id, '_ve_special_tiers', true);
+    if (!is_array($previous)) {
+        $previous = [];
+    }
+
+    // Prefer freshly saved normal tiers from this same request when available
+    $normal_tiers = get_post_meta($post_id, '_ve_tiers', true);
+    if (!is_array($normal_tiers)) {
+        $normal_tiers = [];
+    }
+
+    $special = [];
+    if (isset($_POST['ve_special_tiers']) && is_array($_POST['ve_special_tiers'])) {
+        foreach ($_POST['ve_special_tiers'] as $key => $tier) {
+            if (!is_array($tier)) {
+                continue;
+            }
+            $name         = sanitize_text_field($tier['name'] ?? '');
+            $price        = floatval($tier['price'] ?? 0);
+            $free_tickets = max(0, intval($tier['free_tickets'] ?? 0));
+            $free_tier    = sanitize_text_field($tier['free_tier_key'] ?? '');
+
+            if ($name === '' || $price <= 0) {
+                continue;
+            }
+
+            // Free tier required only when free tickets > 0
+            if ($free_tickets > 0) {
+                if ($free_tier === '' || !isset($normal_tiers[$free_tier])) {
+                    // Skip invalid free-tier config rather than saving a broken package
+                    continue;
+                }
+            } else {
+                $free_tier = '';
+            }
+
+            $key = (string) $key;
+            $is_temp_new   = ($key === '' || preg_match('/^new\d+$/i', $key));
+            $already_saved = array_key_exists($key, $previous);
+            if ($is_temp_new && !$already_saved) {
+                $base = sanitize_title($name);
+                if ($base === '') {
+                    $base = 'package';
+                }
+                $slug = $base;
+                $i    = 2;
+                while (isset($special[$slug])) {
+                    $slug = $base . '-' . $i;
+                    $i++;
+                }
+                $key = $slug;
+            }
+
+            $special[$key] = [
+                'name'          => $name,
+                'price'         => $price,
+                'free_tickets'  => $free_tickets,
+                'free_tier_key' => $free_tier,
+            ];
+        }
+    }
+
+    update_post_meta($post_id, '_ve_special_tiers', $special);
+}
+
+// ====================== GUEST LIST PAGE ======================
 function ve_guest_list_page() {
     if (! current_user_can('manage_options')) {
         wp_die(__('Sorry, you are not allowed to access this page.'));
     }
 
-    // Get selected event filter
     $event_id = isset($_REQUEST['event_id']) ? intval($_REQUEST['event_id']) : 0;
 
     $table = new VE_Guest_List_Table();
@@ -175,9 +385,8 @@ function ve_guest_list_page() {
     ?>
     <div class="wrap">
         <h1 class="wp-heading-inline">Guest Lists</h1>
-        <p>All registrations. Searchable and sortable.</p>
+        <p>People only (attendees and free included tickets). Packages appear under <strong>Special Lists</strong>.</p>
 
-        <!-- Filter form (this was the broken part) -->
         <form method="get" style="margin-bottom: 20px;">
             <input type="hidden" name="page" value="ve-guest-list">
             <input type="hidden" name="post_type" value="ve_event">
@@ -193,7 +402,7 @@ function ve_guest_list_page() {
                 ]);
                 foreach ($events as $event) {
                     $selected = ($event_id == $event->ID) ? ' selected' : '';
-                    echo '<option value="' . esc_attr($event->ID) . '"' . $selected . '>' 
+                    echo '<option value="' . esc_attr($event->ID) . '"' . $selected . '>'
                          . esc_html($event->post_title) . '</option>';
                 }
                 ?>
@@ -202,6 +411,55 @@ function ve_guest_list_page() {
             <button type="submit" class="button">Filter</button>
 
             <?php $table->search_box('Search by name or email', 'search'); ?>
+        </form>
+
+        <?php $table->display(); ?>
+    </div>
+    <?php
+}
+
+// ====================== SPECIAL PACKAGE LIST PAGE ======================
+function ve_special_list_page() {
+    if (! current_user_can('manage_options')) {
+        wp_die(__('Sorry, you are not allowed to access this page.'));
+    }
+
+    $event_id = isset($_REQUEST['event_id']) ? intval($_REQUEST['event_id']) : 0;
+
+    require_once __DIR__ . '/class-ve-special-list-table.php';
+    $table = new VE_Special_List_Table();
+    $table->prepare_items($event_id);
+
+    ?>
+    <div class="wrap">
+        <h1 class="wp-heading-inline">Special Lists</h1>
+        <p>Package purchases (tables, stands, etc.). Guest names are on the <strong>Guest List</strong>.</p>
+
+        <form method="get" style="margin-bottom: 20px;">
+            <input type="hidden" name="page" value="ve-special-list">
+            <input type="hidden" name="post_type" value="ve_event">
+
+            <select name="event_id" style="float:left; margin-right:8px;">
+                <option value="0">— All Events —</option>
+                <?php
+                $events = get_posts([
+                    'post_type'      => 've_event',
+                    'posts_per_page' => -1,
+                    'orderby'        => 'title',
+                    'order'          => 'ASC',
+                ]);
+                foreach ($events as $event) {
+                    $label = $event->post_title . ' - Special';
+                    $selected = ($event_id == $event->ID) ? ' selected' : '';
+                    echo '<option value="' . esc_attr($event->ID) . '"' . $selected . '>'
+                         . esc_html($label) . '</option>';
+                }
+                ?>
+            </select>
+
+            <button type="submit" class="button">Filter</button>
+
+            <?php $table->search_box('Search packages', 'search'); ?>
         </form>
 
         <?php $table->display(); ?>
@@ -228,6 +486,15 @@ function ve_add_admin_menu() {
         'manage_options',
         've-guest-list',
         've_guest_list_page'
+    );
+
+    add_submenu_page(
+        'edit.php?post_type=ve_event',
+        'Special Lists',
+        'Special Lists',
+        'manage_options',
+        've-special-list',
+        've_special_list_page'
     );
 }
 

@@ -1,35 +1,55 @@
 /**
  * Venture Events – frontend styles
- * Primary #f48c26, accent #c0d03c.
- * Intentionally does NOT set font-family / font-weight / font-size so the theme controls typography.
+ * Tuned to venture.com.na Elementor kit (post-6):
+ *   primary #F4A239 · accent #D1D741 · text #221F21 · secondary #7A7A7A
+ *   font: Effra only · weights 300 (normal) / 400 (emphasis) · square buttons
+ * Fonts are expected from the theme/Elementor; we only declare the family name.
  */
 
 .venture-events-registration,
 .ve-payment-page,
 .ve-card {
-	--ve-primary: #f48c26;
-	--ve-accent: #c0d03c;
-	--ve-secondary: #54595f;
-	--ve-text: #7a7a7a;
+	/* Brand (Elementor globals) */
+	--ve-primary: #f4a239;
+	--ve-primary-hover: #e09128;
+	--ve-accent: #d1d741;
+	--ve-accent-hover: #bdc438;
+	--ve-text: #221f21;
+	--ve-secondary: #7a7a7a;
+	--ve-muted: #7a7a7a;
 	--ve-surface: #ffffff;
-	--ve-surface-soft: #f7f8f5;
-	--ve-danger: #d63638;
-	--ve-radius: 5px;
-	--ve-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
-	--ve-shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.06);
+	--ve-surface-soft: #f7f5f0;
+	--ve-cream: #eee3c8;
+	--ve-border: #d4d0c8;
+	--ve-danger: #db1277;
+	--ve-teal: #259887;
+
+	/* Geometry — site CTAs use 0px radius */
+	--ve-radius: 0px;
+	--ve-radius-soft: 2px;
+	--ve-shadow: none;
+	--ve-shadow-soft: none;
+
+	/* Type — Effra only; 300 normal, 400 emphasis */
+	--ve-font: "Effra", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--ve-weight-normal: 300;
+	--ve-weight-emphasis: 400;
 }
 
 /* —— Registration form —— */
 .venture-events-registration {
 	max-width: 620px;
 	margin: 0 auto;
-	padding: 24px;
-	/*background: var(--ve-surface);*/
+	padding: 24px 8px 40px;
 	border: none;
 	border-radius: var(--ve-radius);
-	/*box-shadow: var(--ve-shadow);*/
-	color: var(--ve-secondary);
+	color: var(--ve-text);
+	background: transparent;
 	box-sizing: border-box;
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
 }
 
 .venture-events-registration *,
@@ -39,13 +59,21 @@
 }
 
 .venture-events-registration h2 {
-	margin: 0 0 1.25em;
-	color: var(--ve-secondary);
+	margin: 0 0 1.35em;
+	color: var(--ve-text);
 	text-align: center;
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-emphasis);
+	font-size: 1.75em;
+	letter-spacing: 0.02em;
+	line-height: 1.2;
 }
 
 .venture-events-registration label {
-	color: var(--ve-secondary);
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
+	font-size: 0.95em;
 }
 
 .venture-events-registration .ve-required {
@@ -55,38 +83,65 @@
 .venture-events-registration input[type="text"],
 .venture-events-registration input[type="email"],
 .venture-events-registration input[type="tel"],
+.venture-events-registration input[type="number"],
 .venture-events-registration select,
 .venture-events-registration textarea {
 	width: 100%;
-	border: solid;
-	border-width: 1px;
-	border-color: var(--ve-text);
+	border: 1px solid var(--ve-border);
 	border-radius: var(--ve-radius);
-	/*box-shadow: var(--ve-shadow-soft);*/
-	background: var(--ve-surface-soft);
-	padding: 0.7em 0.85em;
-	color: inherit;
-	/* inherit theme typography */
-	font: inherit;
+	background: var(--ve-surface);
+	padding: 0.75em 0.9em;
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
+	font-size: 1em;
+	line-height: 1.4;
+	appearance: none;
+	-webkit-appearance: none;
+	transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.venture-events-registration select {
+	background-image: linear-gradient(45deg, transparent 50%, var(--ve-secondary) 50%),
+		linear-gradient(135deg, var(--ve-secondary) 50%, transparent 50%);
+	background-position: calc(100% - 18px) calc(50% - 3px), calc(100% - 12px) calc(50% - 3px);
+	background-size: 6px 6px, 6px 6px;
+	background-repeat: no-repeat;
+	padding-right: 2.25em;
+}
+
+.venture-events-registration input::placeholder,
+.venture-events-registration textarea::placeholder {
+	color: var(--ve-secondary);
+	opacity: 0.85;
 }
 
 .venture-events-registration input:focus,
 .venture-events-registration select:focus,
 .venture-events-registration textarea:focus {
-	outline: 2px solid var(--ve-accent);
-	outline-offset: 1px;
+	outline: none;
+	border-color: var(--ve-primary);
+	background: var(--ve-surface);
+	box-shadow: inset 0 0 0 1px var(--ve-primary);
 }
 
 .venture-events-registration .ve-hint {
-	color: var(--ve-text);
+	color: var(--ve-secondary);
+	font-size: 0.9em;
+	font-weight: var(--ve-weight-normal);
+}
+
+.venture-events-registration .ve-error {
+	color: var(--ve-danger);
+	font-family: var(--ve-font);
 }
 
 /* Ticket accordion */
 .venture-events-registration .ticket-accordion {
 	margin-bottom: 18px;
-	border: none;
+	border: 1px solid var(--ve-border);
 	border-radius: var(--ve-radius);
-	box-shadow: var(--ve-shadow);
+	box-shadow: none;
 	background: var(--ve-surface);
 	overflow: hidden;
 }
@@ -94,29 +149,44 @@
 .venture-events-registration .accordion-header {
 	background: var(--ve-accent);
 	color: var(--ve-surface);
-	padding: 12px 15px;
-	cursor: pointer;
+	padding: 12px 16px;
+	cursor: default;
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
 	border: none;
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-emphasis);
+	letter-spacing: 0.02em;
+}
+
+.venture-events-registration .accordion-header strong {
+	font-weight: var(--ve-weight-emphasis);
 }
 
 .venture-events-registration .accordion-body {
-	padding: 18px;
+	padding: 18px 16px;
+	background: var(--ve-surface);
+}
+
+.venture-events-registration .accordion-body p {
+	margin: 0 0 0.9em;
+}
+
+.venture-events-registration .accordion-body p:last-child {
+	margin-bottom: 0;
 }
 
 .venture-events-registration .remove-ticket-btn {
 	background: none;
 	border: none;
-	color: #1d2327;
+	color: var(--ve-text);
 	cursor: pointer;
 	line-height: 1;
 	padding: 0 4px;
-	opacity: 0.85;
-	/* avoid forcing font metrics beyond a relative scale */
+	opacity: 0.75;
 	font: inherit;
-	transform: scale(1.4);
+	transform: scale(1.35);
 }
 
 .venture-events-registration .remove-ticket-btn:hover {
@@ -124,22 +194,24 @@
 	color: var(--ve-danger);
 }
 
-/* Buttons */
+/* Buttons — match Elementor CTAs: square, 1px border, Effra */
 .venture-events-registration .ve-btn {
 	display: inline-block;
 	width: 100%;
 	margin: 0;
-	padding: 0.9em 1.5em;
-	border: none;
+	padding: 0.85em 1.5em;
+	border: 1px solid transparent;
 	border-radius: var(--ve-radius);
-	box-shadow: var(--ve-shadow-soft);
+	box-shadow: none;
 	cursor: pointer;
 	text-align: center;
 	text-decoration: none;
-	/* inherit theme font-family / weight / size */
-	font: inherit;
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-emphasis);
+	font-size: 1.05em;
 	line-height: 1.3;
-	transition: background-color 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+	letter-spacing: 0.02em;
+	transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .venture-events-registration .ve-btn:disabled,
@@ -148,26 +220,28 @@
 	box-shadow: none;
 }
 
+/* Primary CTA = accent lime (site default Elementor button) */
 .venture-events-registration .ve-btn-primary {
-	background: var(--ve-primary);
-	color: #fff;
+	background: var(--ve-accent);
+	border-color: var(--ve-accent);
+	color: #fff !important;
 }
 
 .venture-events-registration .ve-btn-primary:hover:not(:disabled):not(.is-disabled) {
-	background: #e07a18;
-	color: #fff;
+	background: #fff;
+	color: var(--ve-accent) !important;
+	border-color: var(--ve-accent);
 }
 
 .venture-events-registration .ve-btn-primary:disabled,
 .venture-events-registration .ve-btn-primary.is-disabled {
-	background: #d0d0d0;
-	color: #fff;
+	background: #d8d8d8;
+	border-color: #d8d8d8;
+	color: #fff !important;
 	opacity: 1;
-	/* Let hover reach the wrapper so the native title tooltip can show while disabled */
 	pointer-events: none;
 }
 
-/* Wrapper needed because disabled buttons don't receive mouse events in most browsers */
 .venture-events-registration .ve-checkout-wrap {
 	display: block;
 	width: 100%;
@@ -177,15 +251,24 @@
 	cursor: not-allowed;
 }
 
+/* Secondary = orange outline (explicit colour so global .ve-btn white text cannot win) */
 .venture-events-registration .ve-btn-secondary {
-	background: var(--ve-accent);
-	color: #1d2327;
+	background: transparent;
+	border-color: var(--ve-primary);
+	color: var(--ve-primary) !important;
 	margin: 20px 0;
 }
 
 .venture-events-registration .ve-btn-secondary:hover:not(:disabled) {
-	background: #b0c032;
-	color: #1d2327;
+	background: var(--ve-primary);
+	border-color: var(--ve-primary);
+	color: #fff !important;
+}
+
+.venture-events-registration .ve-btn-secondary:disabled {
+	border-color: #d0d0d0;
+	color: #a0a0a0 !important;
+	background: transparent;
 }
 
 .venture-events-registration .ve-btn .dashicons {
@@ -200,9 +283,9 @@
 /* Billing panel */
 .venture-events-registration #billing-details {
 	margin: 20px 0;
-	border: none;
+	border: 1px solid var(--ve-border);
 	border-radius: var(--ve-radius);
-	box-shadow: var(--ve-shadow);
+	box-shadow: none;
 	padding: 0;
 	background: var(--ve-surface);
 	overflow: hidden;
@@ -218,12 +301,14 @@
 	justify-content: space-between;
 	gap: 0.75em;
 	cursor: pointer;
-	padding: 12px 15px;
+	padding: 12px 16px;
 	background: var(--ve-surface-soft);
 	border: none;
 	border-radius: 0;
 	list-style: none;
-	color: var(--ve-secondary);
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
 }
 
 .venture-events-registration #billing-details > summary::-webkit-details-marker {
@@ -245,6 +330,7 @@
 	height: 20px;
 	font-size: 20px;
 	transition: transform 0.15s ease;
+	color: var(--ve-secondary);
 }
 
 .venture-events-registration #billing-details[open] > summary .ve-billing-chevron {
@@ -252,36 +338,84 @@
 }
 
 .venture-events-registration #billing-details .billing-fields {
-	padding: 15px;
+	padding: 16px;
+	border-top: 1px solid var(--ve-border);
 }
 
 /* Totals */
 .venture-events-registration .ve-total-line {
-	margin: 15px 0 5px;
+	margin: 18px 0 6px;
 	text-align: center;
-	color: var(--ve-secondary);
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-emphasis);
+	font-size: 1.15em;
 }
 
 .venture-events-registration #vat-breakdown {
 	margin-bottom: 25px;
-	min-height: 50px;
+	min-height: 40px;
 	text-align: center;
-	color: var(--ve-text);
+	color: var(--ve-secondary);
+	font-size: 0.95em;
 }
 
-/* —— Shared payment shell (also used when CSS is inlined on standalone pages) —— */
+/* Special package registration */
+.venture-events-registration.ve-registration-special .ve-package-section {
+	margin-bottom: 1.25em;
+	padding: 16px;
+	border: 1px solid var(--ve-border);
+	background: var(--ve-surface);
+}
+
+.venture-events-registration .ve-package-hint {
+	margin-top: 0.5em;
+	margin-bottom: 0;
+}
+
+.venture-events-registration .ve-special-body[hidden] {
+	display: none !important;
+}
+
+.venture-events-registration .ve-free-ticket .accordion-header {
+	background: var(--ve-primary);
+	color: #fff;
+}
+
+.venture-events-registration .ve-included-tier {
+	margin: 0 0 1em;
+	padding: 0.7em 0.9em;
+	background: var(--ve-cream);
+	border: 1px solid var(--ve-border);
+	border-radius: var(--ve-radius);
+	color: var(--ve-text);
+	font-size: 0.95em;
+}
+
+.venture-events-registration .ve-free-tickets-container {
+	margin-bottom: 0.5em;
+}
+
+.venture-events-registration .ve-extra-tickets-container:empty {
+	margin: 0;
+}
+
+/* —— Shared payment shell —— */
 .ve-payment-page {
 	width: 100%;
 	max-width: 560px;
 	margin: 0 auto;
+	font-family: var(--ve-font);
+	color: var(--ve-text);
+	-webkit-font-smoothing: antialiased;
 }
 
 .ve-payment-card,
 .ve-card {
 	background: var(--ve-surface, #fff);
-	border: none;
-	border-radius: 10px;
-	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+	border: 1px solid var(--ve-border, #d4d0c8);
+	border-radius: 0;
+	box-shadow: none;
 	overflow: hidden;
 }
 
@@ -290,44 +424,49 @@
 	padding: 28px 28px 16px;
 	text-align: center;
 	border: none;
-	border-bottom: 3px solid var(--ve-accent, #c0d03c);
-	background: linear-gradient(135deg, rgba(192, 208, 60, 0.18), #fff 70%);
+	border-bottom: 3px solid var(--ve-accent, #d1d741);
+	background: linear-gradient(135deg, rgba(209, 215, 65, 0.18), #fff 70%);
 }
 
 .ve-payment-header.failed,
 .ve-header.failed {
-	border-bottom-color: var(--ve-danger, #d63638);
-	background: linear-gradient(135deg, rgba(214, 54, 56, 0.08), #fff 70%);
+	border-bottom-color: var(--ve-danger, #db1277);
+	background: linear-gradient(135deg, rgba(219, 18, 119, 0.08), #fff 70%);
 }
 
 .ve-payment-header.success,
 .ve-header.success {
-	border-bottom-color: var(--ve-accent, #c0d03c);
-	background: linear-gradient(135deg, rgba(192, 208, 60, 0.2), #fff 70%);
+	border-bottom-color: var(--ve-accent, #d1d741);
+	background: linear-gradient(135deg, rgba(209, 215, 65, 0.22), #fff 70%);
 }
 
 .ve-payment-header h1,
 .ve-header h1 {
 	margin: 0 0 8px;
-	color: var(--ve-secondary, #54595f);
+	color: var(--ve-text, #221f21);
+	font-family: var(--ve-font, "Effra", sans-serif);
+	font-weight: 400;
+	letter-spacing: 0.02em;
 }
 
 .ve-payment-header p,
 .ve-header p {
 	margin: 0;
-	color: var(--ve-text, #7a7a7a);
+	color: var(--ve-secondary, #7a7a7a);
+	font-family: var(--ve-font, "Effra", sans-serif);
 }
 
 .ve-payment-meta,
 .ve-meta {
-	background: var(--ve-surface-soft, #f7f8f5);
-	border: none;
-	border-radius: 10px;
+	background: var(--ve-surface-soft, #f7f5f0);
+	border: 1px solid var(--ve-border, #d4d0c8);
+	border-radius: 0;
 	box-shadow: none;
 	padding: 12px 16px;
-	margin: 0 16px 8px;
+	margin: 16px 16px 8px;
 	text-align: left;
-	color: var(--ve-secondary, #54595f);
+	color: var(--ve-text, #221f21);
+	font-family: var(--ve-font, "Effra", sans-serif);
 }
 
 .ve-payment-meta div + div,
@@ -339,13 +478,15 @@
 .ve-meta strong {
 	display: inline-block;
 	min-width: 100px;
-	color: var(--ve-secondary, #54595f);
+	color: var(--ve-text, #221f21);
+	font-weight: 400;
 }
 
 .ve-payment-body,
 .ve-body {
 	padding: 8px 16px 28px;
 	text-align: center;
+	font-family: var(--ve-font, "Effra", sans-serif);
 }
 
 .ve-payment-body > div {
@@ -361,24 +502,40 @@
 	text-align: left;
 }
 
-/* Primary CTA used on result pages */
+/* Primary CTA used on result / payment pages (not registration secondary) */
 .ve-btn {
 	display: inline-block;
-	background: var(--ve-primary, #f48c26);
-	color: #fff !important;
+	background: var(--ve-accent, #d1d741);
+	color: #fff;
 	text-decoration: none;
 	padding: 0.85em 1.75em;
-	border: none;
-	border-radius: 10px;
-	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+	border: 1px solid var(--ve-accent, #d1d741);
+	border-radius: 0;
+	box-shadow: none;
 	cursor: pointer;
-	font: inherit;
+	font-family: var(--ve-font, "Effra", sans-serif);
+	font-weight: 400;
+	font-size: 1.05em;
 	line-height: 1.3;
+	letter-spacing: 0.02em;
+	transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .ve-btn:hover {
-	background: #e07a18;
-	color: #fff !important;
+	background: #fff;
+	color: var(--ve-accent, #d1d741);
+	border-color: var(--ve-accent, #d1d741);
+}
+
+/* Standalone payment-page primary only — avoid clobbering .ve-btn-secondary */
+.ve-payment-page .ve-btn:not(.ve-btn-secondary),
+.ve-actions .ve-btn:not(.ve-btn-secondary) {
+	color: #fff;
+}
+
+.ve-payment-page .ve-btn:not(.ve-btn-secondary):hover,
+.ve-actions .ve-btn:not(.ve-btn-secondary):hover {
+	color: var(--ve-accent, #d1d741);
 }
 
 .ve-actions {
@@ -387,48 +544,69 @@
 }
 
 .ve-note {
-	color: var(--ve-text, #7a7a7a);
+	color: var(--ve-secondary, #7a7a7a);
 	line-height: 1.5;
+	font-family: var(--ve-font, "Effra", sans-serif);
 }
 
 .ve-total {
 	text-align: right;
 	margin: 8px 0 20px;
-	color: var(--ve-secondary, #54595f);
+	color: var(--ve-text, #221f21);
+	font-family: var(--ve-font, "Effra", sans-serif);
+	font-weight: 400;
 }
 
 .ve-tickets {
 	width: 100%;
 	border-collapse: collapse;
 	margin: 16px 0 24px;
+	font-family: var(--ve-font, "Effra", sans-serif);
 }
 
 .ve-tickets th,
 .ve-tickets td {
 	text-align: left;
 	padding: 10px 8px;
-	border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+	border-bottom: 1px solid var(--ve-border, #d4d0c8);
+	color: var(--ve-text, #221f21);
 }
 
 .ve-tickets th {
-	color: var(--ve-text, #7a7a7a);
+	color: var(--ve-secondary, #7a7a7a);
+	font-weight: 400;
 }
 
 .ve-status-pill {
 	display: inline-block;
 	padding: 3px 10px;
-	border: none;
-	border-radius: 999px;
+	border: 1px solid transparent;
+	border-radius: 0;
 	text-transform: uppercase;
-	letter-spacing: 0.02em;
+	letter-spacing: 0.04em;
+	font-size: 0.8em;
+	font-family: var(--ve-font, "Effra", sans-serif);
+	font-weight: 400;
 }
 
 .ve-status-pill.paid {
-	background: rgba(192, 208, 60, 0.35);
+	background: rgba(209, 215, 65, 0.35);
+	border-color: var(--ve-accent, #d1d741);
 	color: #3d4a10;
 }
 
 .ve-status-pill.pending {
-	background: #f0f0f1;
-	color: var(--ve-text, #7a7a7a);
+	background: var(--ve-surface-soft, #f7f5f0);
+	border-color: var(--ve-border, #d4d0c8);
+	color: var(--ve-secondary, #7a7a7a);
+}
+
+/* Bank Windhoek gateway errors inside payment body (if present) */
+.ve-bankwindhoek-error {
+	font-family: var(--ve-font, "Effra", sans-serif);
+	color: var(--ve-text, #221f21);
+	border: 1px solid var(--ve-danger, #db1277);
+	background: rgba(219, 18, 119, 0.06);
+	padding: 14px 16px;
+	text-align: left;
 }

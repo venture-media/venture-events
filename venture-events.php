@@ -3,7 +3,7 @@
  * Plugin Name:       Venture Events
  * Plugin URI:        https://github.com/venture-media/venture-events
  * Description:       Event registration with flexible payment gateways + Zoho Books invoicing + QR tickets.
- * Version:           0.9.7
+ * Version:           0.9.12
  * Author:            Leon de Klerk
  * Author URI:        https://github.com/Leon2332
  * License:           MIT
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('VE_VERSION', '0.9.7');
+define('VE_VERSION', '0.9.12');
 define('VE_PATH', plugin_dir_path(__FILE__));
 define('VE_URL', plugin_dir_url(__FILE__));
 
@@ -23,6 +23,7 @@ require_once VE_PATH . 'includes/ve-qrcode.php';
 require_once VE_PATH . 'includes/ve-zoho.php';
 require_once VE_PATH . 'includes/class-ve-gateway-manager.php';
 require_once VE_PATH . 'includes/class-ve-guest-list-table.php';
+require_once VE_PATH . 'includes/class-ve-special-list-table.php';
 
 // Activation Hook
 register_activation_hook(__FILE__, 've_activate');
@@ -82,7 +83,8 @@ function ve_register_cpt() {
             'not_found'          => 'No events found',
             'not_found_in_trash' => 'No events found in Trash',
             'all_items'          => 'All Events',
-            'menu_name'          => 'Events',
+            // Top-level admin menu only — avoid clash with child-theme "Events" CPT (post_type=events)
+            'menu_name'          => 'Tickets',
             'name_admin_bar'     => 'Event',
         ],
         'public'       => true,
@@ -93,20 +95,40 @@ function ve_register_cpt() {
 }
 
 // Shortcode for registration form
+// Normal:  [venture_registration event_id="123"]
+// Special: [venture_registration event_id="S123"]
 add_shortcode('venture_registration', 've_registration_form_shortcode');
 function ve_registration_form_shortcode($atts) {
-    $atts = shortcode_atts(['event_id' => 0], $atts);
-    $event_id = intval($atts['event_id']);
+    $atts = shortcode_atts(['event_id' => ''], $atts, 'venture_registration');
+    $parsed   = ve_parse_registration_event_attr($atts['event_id']);
+    $event_id = (int) $parsed['event_id'];
+    $mode     = $parsed['mode'];
 
     // Ensure CSS/JS load even when the shortcode lives in a page builder (not post_content).
     ve_enqueue_registration_assets(true);
 
     if (!$event_id) {
-        return '<p class="ve-error">Error: Please provide event_id in the shortcode, e.g. [venture_registration event_id="123"]</p>';
+        return '<p class="ve-error">Error: Please provide event_id in the shortcode, e.g. [venture_registration event_id="123"] or [venture_registration event_id="S123"] for special packages.</p>';
+    }
+
+    if (get_post_type($event_id) !== 've_event') {
+        return '<p class="ve-error">Error: Event not found.</p>';
+    }
+
+    if ($mode === 'special') {
+        $special = ve_get_special_tiers($event_id);
+        if (empty($special)) {
+            return '<p class="ve-error">Error: This event has no special ticket tiers configured.</p>';
+        }
     }
 
     ob_start();
-    $template_path = VE_PATH . 'templates/registration-form.php';
+    $template_path = ($mode === 'special')
+        ? VE_PATH . 'templates/registration-form-special.php'
+        : VE_PATH . 'templates/registration-form.php';
+
+    // Make mode available to templates if needed
+    $ve_registration_mode = $mode;
 
     if (file_exists($template_path)) {
         include $template_path;

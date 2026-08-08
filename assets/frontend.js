@@ -104,28 +104,39 @@
         };
     }
 
+    function isSpecialMode() {
+        return (window.veRegistrationMode === 'special')
+            || ($('#ve-form-mode').val() === 'special')
+            || ($('#ve-registration-form').data('mode') === 'special');
+    }
+
+    function personFieldsHTML() {
+        return `
+            <p><label>First Name <span class="ve-required">*</span></label><br>
+               <input type="text" class="first_name" required></p>
+            <p><label>Last Name <span class="ve-required">*</span></label><br>
+               <input type="text" class="last_name" required></p>
+            <p><label>Organisation</label><br>
+               <input type="text" class="organisation"></p>
+            <p><label>Phone</label><br>
+               <input type="text" class="phone"></p>
+            <p><label>Email (for ticket) <span class="ve-required">*</span></label><br>
+               <input type="email" class="email" required></p>`;
+    }
+
     function createTicketHTML(index, tierOptions) {
         const removeBtn = index > 0
             ? `<button type="button" class="remove-ticket-btn" aria-label="Remove ticket">×</button>`
             : '';
 
         return `
-        <div class="ticket-accordion" data-index="${index}">
+        <div class="ticket-accordion" data-index="${index}" data-kind="paid">
             <div class="accordion-header">
                 <strong>Ticket ${index + 1}</strong>
                 ${removeBtn}
             </div>
             <div class="accordion-body">
-                <p><label>First Name <span class="ve-required">*</span></label><br>
-                   <input type="text" class="first_name" required></p>
-                <p><label>Last Name <span class="ve-required">*</span></label><br>
-                   <input type="text" class="last_name" required></p>
-                <p><label>Organisation</label><br>
-                   <input type="text" class="organisation"></p>
-                <p><label>Phone</label><br>
-                   <input type="text" class="phone"></p>
-                <p><label>Email (for ticket) <span class="ve-required">*</span></label><br>
-                   <input type="email" class="email" required></p>
+                ${personFieldsHTML()}
                 <p><label>Ticket Tier <span class="ve-required">*</span></label><br>
                    <select class="tier-select" required>
                        <option value="">— Please select a tier —</option>
@@ -136,32 +147,138 @@
         </div>`;
     }
 
+    /**
+     * Extra paid tickets on special form may all be removed (package alone is enough).
+     * On normal form, index 0 has no remove button.
+     */
+    function createExtraTicketHTML(index, tierOptions, allowRemove) {
+        const removeBtn = allowRemove
+            ? `<button type="button" class="remove-ticket-btn" aria-label="Remove ticket">×</button>`
+            : '';
+        const title = isSpecialMode()
+            ? `Additional ticket ${index + 1}`
+            : `Ticket ${index + 1}`;
+
+        return `
+        <div class="ticket-accordion" data-index="${index}" data-kind="paid">
+            <div class="accordion-header">
+                <strong>${title}</strong>
+                ${removeBtn}
+            </div>
+            <div class="accordion-body">
+                ${personFieldsHTML()}
+                <p><label>Ticket Tier <span class="ve-required">*</span></label><br>
+                   <select class="tier-select" required>
+                       <option value="">— Please select a tier —</option>
+                       ${tierOptions}
+                   </select>
+                </p>
+            </div>
+        </div>`;
+    }
+
+    function createFreeTicketHTML(index, freeTierName) {
+        const label = freeTierName
+            ? `Included free ticket ${index + 1}`
+            : `Included free ticket ${index + 1}`;
+        const tierLine = freeTierName
+            ? `<p class="ve-included-tier"><strong>Included:</strong> ${$('<div>').text(freeTierName).html()} <span class="ve-hint">(N$ 0.00)</span></p>`
+            : `<p class="ve-included-tier"><strong>Included free ticket</strong> <span class="ve-hint">(N$ 0.00)</span></p>`;
+
+        return `
+        <div class="ticket-accordion ve-free-ticket" data-index="${index}" data-kind="free">
+            <div class="accordion-header">
+                <strong>${label}</strong>
+            </div>
+            <div class="accordion-body">
+                ${tierLine}
+                ${personFieldsHTML()}
+            </div>
+        </div>`;
+    }
+
+    function validatePersonBlock($el, requireTier) {
+        const firstName = ($el.find('.first_name').val() || '').trim();
+        const lastName  = ($el.find('.last_name').val() || '').trim();
+        const email     = ($el.find('.email').val() || '').trim();
+        if (!firstName || !lastName || !email) {
+            return false;
+        }
+        if (requireTier) {
+            const tier = $el.find('.tier-select').val();
+            if (!tier) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     function validateCheckoutButton() {
         let isValid = true;
 
-        $('.ticket-accordion').each(function() {
-            const firstName = $(this).find('.first_name').val().trim();
-            const lastName  = $(this).find('.last_name').val().trim();
-            const email     = $(this).find('.email').val().trim();
-            const tier      = $(this).find('.tier-select').val();
-
-            if (!firstName || !lastName || !email || !tier) {
+        if (isSpecialMode()) {
+            const packageKey = $('#ve-special-tier-select').val();
+            if (!packageKey) {
                 isValid = false;
-                return false;
+            } else {
+                $('#free-tickets-container .ticket-accordion').each(function () {
+                    if (!validatePersonBlock($(this), false)) {
+                        isValid = false;
+                        return false;
+                    }
+                });
+                // Extra paid tickets are optional, but if present must be complete
+                if (isValid) {
+                    $('#tickets-container .ticket-accordion').each(function () {
+                        if (!validatePersonBlock($(this), true)) {
+                            isValid = false;
+                            return false;
+                        }
+                    });
+                }
             }
-        });
+        } else {
+            const $paid = $('#tickets-container .ticket-accordion');
+            if (!$paid.length) {
+                isValid = false;
+            } else {
+                $paid.each(function () {
+                    if (!validatePersonBlock($(this), true)) {
+                        isValid = false;
+                        return false;
+                    }
+                });
+            }
+        }
 
-        const billingAddress  = $('#billing_address').val().trim();
-        const accountingEmail = $('#accounting_email').val().trim();
-        const billingCountry  = $('#billing_country').val();
+        if (isValid) {
+            const billingAddress  = ($('#billing_address').val() || '').trim();
+            const accountingEmail = ($('#accounting_email').val() || '').trim();
+            const billingCountry  = $('#billing_country').val();
+            if (!billingAddress || !accountingEmail || !billingCountry) {
+                isValid = false;
+            }
+            // Special/package form: company is required (normal form leaves it optional)
+            if (isValid && isSpecialMode()) {
+                const billingCompany = ($('#billing_company').val() || '').trim();
+                if (!billingCompany) {
+                    isValid = false;
+                }
+            }
+        }
 
-        if (!billingAddress || !accountingEmail || !billingCountry) {
+        // Special form body may be hidden — no checkout until package chosen
+        if (isSpecialMode() && $('#ve-special-body').prop('hidden')) {
             isValid = false;
         }
 
         const $btn = $('#ve-checkout-btn');
         const $wrap = $btn.closest('.ve-checkout-wrap');
         const disabledTip = 'Complete the form before proceeding';
+
+        if (!$btn.length) {
+            return;
+        }
 
         if (isValid) {
             $btn.prop('disabled', false).removeClass('is-disabled');
@@ -176,10 +293,12 @@
 
     function setAddTicketButtonState() {
         const $btn = $('#add-ticket-btn');
+        if (!$btn.length) {
+            return;
+        }
         const atMax = ticketCount >= MAX_TICKETS;
 
         $btn.prop('disabled', atMax);
-        // Use .html() so dashicons markup renders ( .text() would show raw tags )
         $btn.html(atMax ? 'Maximum 30 tickets reached' : ADD_TICKET_LABEL);
     }
 
@@ -187,11 +306,21 @@
         $('#tickets-container .ticket-accordion').each(function (i) {
             const $ticket = $(this);
             $ticket.attr('data-index', i);
-            $ticket.find('.accordion-header strong').first().text('Ticket ' + (i + 1));
+            const title = isSpecialMode()
+                ? ('Additional ticket ' + (i + 1))
+                : ('Ticket ' + (i + 1));
+            $ticket.find('.accordion-header strong').first().text(title);
 
             const $header = $ticket.find('.accordion-header');
             $header.find('.remove-ticket-btn').remove();
-            if (i > 0) {
+
+            // Normal: cannot remove the only remaining ticket
+            // Special: all extra tickets are removable
+            const allowRemove = isSpecialMode()
+                ? true
+                : (i > 0);
+
+            if (allowRemove) {
                 $header.append(
                     '<button type="button" class="remove-ticket-btn" aria-label="Remove ticket">×</button>'
                 );
@@ -200,11 +329,23 @@
         ticketCount = $('#tickets-container .ticket-accordion').length;
     }
 
-    function addTicket(tierOptions) {
+    function addTicket(tierOptions, options) {
+        options = options || {};
         if (ticketCount >= MAX_TICKETS) return;
 
+        const asExtra = !!options.asExtra || isSpecialMode();
+        const allowRemove = asExtra
+            ? (isSpecialMode() ? true : ticketCount > 0)
+            : (ticketCount > 0);
+
         ticketCount++;
-        $('#tickets-container').append(createTicketHTML(ticketCount - 1, tierOptions));
+        const html = asExtra
+            ? createExtraTicketHTML(ticketCount - 1, tierOptions, allowRemove || ticketCount > 1)
+            : createTicketHTML(ticketCount - 1, tierOptions);
+
+        $('#tickets-container').append(html);
+        // Re-apply remove rules consistently
+        renumberTickets();
 
         updatePriceAndBreakdown();
         validateCheckoutButton();
@@ -212,13 +353,15 @@
     }
 
     function removeTicket(index) {
-        const $target = $(`.ticket-accordion[data-index="${index}"]`);
+        const $target = $('#tickets-container .ticket-accordion').filter(function () {
+            return String($(this).data('index')) === String(index);
+        });
         if (!$target.length) {
             return;
         }
 
-        // Never remove the last remaining ticket
-        if ($('#tickets-container .ticket-accordion').length <= 1) {
+        // Normal form: never remove the last remaining ticket
+        if (!isSpecialMode() && $('#tickets-container .ticket-accordion').length <= 1) {
             return;
         }
 
@@ -230,15 +373,69 @@
         setAddTicketButtonState();
     }
 
+    function getSelectedPackage() {
+        const key = $('#ve-special-tier-select').val();
+        if (!key || !window.veSpecialTiers || !window.veSpecialTiers[key]) {
+            return null;
+        }
+        return Object.assign({ key: key }, window.veSpecialTiers[key]);
+    }
+
+    function renderFreeTickets(pkg) {
+        const $box = $('#free-tickets-container');
+        $box.empty();
+        if (!pkg) {
+            return;
+        }
+        const count = parseInt(pkg.free_tickets, 10) || 0;
+        const freeName = pkg.free_tier_name || '';
+        for (let i = 0; i < count; i++) {
+            $box.append(createFreeTicketHTML(i, freeName));
+        }
+    }
+
+    function showSpecialBody(show) {
+        const $body = $('#ve-special-body');
+        if (!$body.length) {
+            return;
+        }
+        if (show) {
+            $body.prop('hidden', false).attr('aria-hidden', 'false');
+        } else {
+            $body.prop('hidden', true).attr('aria-hidden', 'true');
+            $('#free-tickets-container').empty();
+            $('#tickets-container').empty();
+            ticketCount = 0;
+            setAddTicketButtonState();
+        }
+    }
+
     function updatePriceAndBreakdown() {
         let total = 0;
-        $('.tier-select').each(function() {
+
+        if (isSpecialMode()) {
+            const pkg = getSelectedPackage();
+            if (pkg) {
+                total += parseFloat(pkg.price) || 0;
+            }
+        }
+
+        // Paid ticket tier selects only (not free tickets)
+        $('#tickets-container .tier-select').each(function () {
             total += parseFloat($(this).find('option:selected').data('price')) || 0;
         });
-        
-        const country = $('#billing_country').val();
+
+        // Normal mode: all .tier-select live under #tickets-container already;
+        // keep fallback for older markup without container restriction
+        if (!isSpecialMode() && total === 0) {
+            $('.tier-select').each(function () {
+                total += parseFloat($(this).find('option:selected').data('price')) || 0;
+            });
+        }
+
+        const country = $('#billing_country').val() || 'NA';
         const breakdown = calculateVATBreakdown(total, country);
-        
+
         $('#price-amount').text(breakdown.total);
 
         let html = '';
@@ -252,20 +449,95 @@
         $('#vat-breakdown').html(html);
     }
 
+    function populateCountries() {
+        const countrySelect = $('#billing_country');
+        if (!countrySelect.length || countrySelect.data('ve-countries-filled')) {
+            return;
+        }
+        countries.forEach(c => {
+            if (c.code !== 'NA') {
+                countrySelect.append(`<option value="${c.code}">${c.name}</option>`);
+            }
+        });
+        countrySelect.data('ve-countries-filled', true);
+    }
+
+    function collectPersonFromAccordion($el) {
+        return {
+            first_name: ($el.find('.first_name').val() || '').trim(),
+            last_name: ($el.find('.last_name').val() || '').trim(),
+            organisation: ($el.find('.organisation').val() || '').trim(),
+            phone: ($el.find('.phone').val() || '').trim(),
+            email: ($el.find('.email').val() || '').trim()
+        };
+    }
+
+    function postCheckout(formData, $btn) {
+        const ajaxUrl = (window.veGateway && veGateway.ajax_url)
+            ? window.veGateway.ajax_url
+            : '/wp-admin/admin-ajax.php';
+
+        $.post(ajaxUrl, formData)
+            .done(function (response) {
+                if (response.success && response.data.payment_reference) {
+                    $btn.text('✅ Registrations saved – redirecting to payment...');
+                    const ref = response.data.payment_reference;
+                    window.location.href = window.location.pathname + '?ve_payment=start&ref=' + encodeURIComponent(ref);
+                } else {
+                    alert('❌ ' + ((response.data && response.data.message) || 'Unknown error'));
+                    $btn.prop('disabled', false).text('Proceed to Payment');
+                    validateCheckoutButton();
+                }
+            })
+            .fail(function () {
+                alert('Network error – please try again.');
+                $btn.prop('disabled', false).text('Proceed to Payment');
+                validateCheckoutButton();
+            });
+    }
+
     // Main initialization
-    $(document).ready(function() {
+    $(document).ready(function () {
         const $form = $('#ve-registration-form');
         if (!$form.length) return;
 
-        console.log('✅ Venture Events registration form initialized');
+        const special = isSpecialMode();
+        console.log('✅ Venture Events registration form initialized', special ? '(special)' : '(normal)');
 
         const tierOptions = window.veTierOptions || '';
 
-        // Start with first ticket
-        addTicket(tierOptions);
+        if (special) {
+            // Body stays hidden until package chosen (default option is "Select")
+            showSpecialBody(false);
 
-        $('#add-ticket-btn').on('click', function() {
-            addTicket(tierOptions);
+            $('#ve-special-tier-select').on('change', function () {
+                const pkg = getSelectedPackage();
+                if (!pkg) {
+                    showSpecialBody(false);
+                    updatePriceAndBreakdown();
+                    validateCheckoutButton();
+                    return;
+                }
+
+                showSpecialBody(true);
+                renderFreeTickets(pkg);
+                // Do not auto-add extra paid tickets; package + free is enough
+                $('#tickets-container').empty();
+                ticketCount = 0;
+                setAddTicketButtonState();
+                updatePriceAndBreakdown();
+                validateCheckoutButton();
+            });
+        } else {
+            // Start with first paid ticket
+            addTicket(tierOptions, { asExtra: false });
+        }
+
+        $('#add-ticket-btn').on('click', function () {
+            if (special && !getSelectedPackage()) {
+                return;
+            }
+            addTicket(tierOptions, { asExtra: true });
         });
 
         $(document).on('click', '.remove-ticket-btn', function (e) {
@@ -275,72 +547,80 @@
             removeTicket(index);
         });
 
-        // Real-time validation + price update
-        $(document).on('input change', '.first_name, .last_name, .email, .tier-select, #billing_address, #accounting_email, #billing_country', function() {
-            validateCheckoutButton();
-            updatePriceAndBreakdown();
-        });
-
-        // === Populate countries dropdown ===
-        const countrySelect = $('#billing_country');
-        countries.forEach(c => {
-            if (c.code !== 'NA') {
-                countrySelect.append(`<option value="${c.code}">${c.name}</option>`);
+        $(document).on(
+            'input change',
+            '.first_name, .last_name, .email, .tier-select, #billing_company, #billing_address, #accounting_email, #billing_country, #ve-special-tier-select',
+            function () {
+                validateCheckoutButton();
+                updatePriceAndBreakdown();
             }
-        });
+        );
 
-        // Checkout button handler
-        $('#ve-checkout-btn').on('click', function() {
-            const btn = $(this);
-            btn.prop('disabled', true).text('Saving registrations...');
+        populateCountries();
 
-            const tickets = [];
-            $('.ticket-accordion').each(function() {
-                tickets.push({
-                    first_name: $(this).find('.first_name').val().trim(),
-                    last_name:  $(this).find('.last_name').val().trim(),
-                    organisation: $(this).find('.organisation').val().trim(),
-                    phone: $(this).find('.phone').val().trim(),
-                    email: $(this).find('.email').val().trim(),
-                    tier: $(this).find('.tier-select').val(),
-                    price: parseFloat($(this).find('.tier-select option:selected').data('price')) || 0
-                });
-            });
+        $('#ve-checkout-btn').on('click', function () {
+            const $btn = $(this);
+            if ($btn.prop('disabled')) {
+                return;
+            }
 
-            const ajaxUrl = (window.veGateway && veGateway.ajax_url) 
-                ? window.veGateway.ajax_url 
-                : '/wp-admin/admin-ajax.php';
+            $btn.prop('disabled', true).text('Saving registrations...');
 
-            const formData = {
+            const base = {
                 action: 've_save_pending_registrations',
                 nonce: (window.veGateway && veGateway.nonce) || '',
                 event_id: $('#ve-event-id').val(),
-                tickets: tickets,
-                billing_company: $('#billing_company').val().trim(),
-                billing_address: $('#billing_address').val().trim(),
+                billing_company: ($('#billing_company').val() || '').trim(),
+                billing_address: ($('#billing_address').val() || '').trim(),
                 billing_country: $('#billing_country').val(),
-                accounting_email: $('#accounting_email').val().trim(),
-                billing_notes: $('#billing_notes').val().trim()
+                accounting_email: ($('#accounting_email').val() || '').trim(),
+                billing_notes: ($('#billing_notes').val() || '').trim()
             };
 
-            $.post(ajaxUrl, formData)
-                .done(function(response) {
-                    if (response.success && response.data.payment_reference) {
-                        btn.text('✅ Registrations saved – redirecting to payment...');
-                        const ref = response.data.payment_reference;
-                        window.location.href = window.location.pathname + '?ve_payment=start&ref=' + encodeURIComponent(ref);
-                    } else {
-                        alert('❌ ' + (response.data?.message || 'Unknown error'));
-                        btn.prop('disabled', false).text('Proceed to Payment');
-                    }
-                })
-                .fail(function() {
-                    alert('Network error – please try again.');
-                    btn.prop('disabled', false).text('Proceed to Payment');
+            if (special) {
+                const pkg = getSelectedPackage();
+                if (!pkg) {
+                    alert('Please select a package.');
+                    $btn.prop('disabled', false).text('Proceed to Payment');
+                    validateCheckoutButton();
+                    return;
+                }
+
+                const free_tickets = [];
+                $('#free-tickets-container .ticket-accordion').each(function () {
+                    free_tickets.push(collectPersonFromAccordion($(this)));
                 });
+
+                const tickets = [];
+                $('#tickets-container .ticket-accordion').each(function () {
+                    const person = collectPersonFromAccordion($(this));
+                    person.tier = $(this).find('.tier-select').val();
+                    person.price = parseFloat($(this).find('.tier-select option:selected').data('price')) || 0;
+                    tickets.push(person);
+                });
+
+                postCheckout(Object.assign({}, base, {
+                    mode: 'special',
+                    special_tier: pkg.key,
+                    free_tickets: free_tickets,
+                    tickets: tickets
+                }), $btn);
+            } else {
+                const tickets = [];
+                $('#tickets-container .ticket-accordion').each(function () {
+                    const person = collectPersonFromAccordion($(this));
+                    person.tier = $(this).find('.tier-select').val();
+                    person.price = parseFloat($(this).find('.tier-select option:selected').data('price')) || 0;
+                    tickets.push(person);
+                });
+
+                postCheckout(Object.assign({}, base, {
+                    mode: 'normal',
+                    tickets: tickets
+                }), $btn);
+            }
         });
 
-        // Initial state
         validateCheckoutButton();
         updatePriceAndBreakdown();
     });

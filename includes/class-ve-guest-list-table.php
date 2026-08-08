@@ -11,25 +11,22 @@ class VE_Guest_List_Table extends WP_List_Table {
         $current_page = $this->get_pagenum();
         $search     = isset($_REQUEST['s']) ? sanitize_text_field($_REQUEST['s']) : '';
 
-        // Build WHERE conditions and arguments safely
-        $where_conditions = [];
-        $args = [];
+        // People only — packages live on Special Lists
+        $where_conditions = ["(r.line_type IS NULL OR r.line_type = '' OR r.line_type = %s)"];
+        $args             = ['person'];
 
         if ($event_id > 0) {
             $where_conditions[] = 'r.event_id = %d';
-            $args[] = $event_id;
+            $args[]             = $event_id;
         }
 
         if ($search) {
             $like = '%' . $wpdb->esc_like($search) . '%';
-            $where_conditions[] = "(first_name LIKE %s OR last_name LIKE %s OR email LIKE %s OR organisation LIKE %s OR internal_reference LIKE %s OR status LIKE %s)";
+            $where_conditions[] = "(r.first_name LIKE %s OR r.last_name LIKE %s OR r.email LIKE %s OR r.organisation LIKE %s OR r.internal_reference LIKE %s OR r.status LIKE %s)";
             $args = array_merge($args, [$like, $like, $like, $like, $like, $like]);
         }
 
-        $where = '';
-        if (!empty($where_conditions)) {
-            $where = 'WHERE ' . implode(' AND ', $where_conditions);
-        }
+        $where = 'WHERE ' . implode(' AND ', $where_conditions);
 
         // Count total items
         $count_query = "SELECT COUNT(*) FROM $table_name r $where";
@@ -122,7 +119,11 @@ class VE_Guest_List_Table extends WP_List_Table {
                 $tier_name = function_exists('ve_registration_tier_label')
                     ? ve_registration_tier_label($item)
                     : (string) ($item->tier ?? '');
-                return '<strong>' . esc_html($tier_name) . '</strong>';
+                $label = '<strong>' . esc_html($tier_name) . '</strong>';
+                if (!empty($item->included_free)) {
+                    $label .= ' <span style="color:#646970;font-weight:normal;">(included)</span>';
+                }
+                return $label;
 
             case 'price':
                 return 'N$ ' . number_format((float)($item->price ?? 0), 2);

@@ -864,7 +864,8 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
             $is_namibia = (strtoupper($reg->billing_country ?? 'NA') === 'NA');
             $tax_id = ve_zoho_resolve_tax_id($is_namibia);
 
-            if ($is_namibia) {
+            // Zero-rated free included tickets stay at 0; do not invent tax on free lines.
+            if ($is_namibia && $rate > 0) {
                 $rate = round($rate / 1.15, 2);
             }
 
@@ -872,18 +873,34 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
                 ? ve_registration_tier_label($item)
                 : (string) ($item->tier ?? 'Ticket');
 
-            $line_description = trim(
-                ($item->organisation ?? '') . ' - ' .
-                ($item->first_name ?? '') . ' ' .
-                ($item->last_name ?? '')
-            ) . ' - ' . $tier_name;
+            $is_package = function_exists('ve_is_package_registration') && ve_is_package_registration($item);
+            $is_free    = !empty($item->included_free);
+
+            if ($is_package) {
+                // Package line: package name + billing company (no personal ticket wording)
+                $org = trim((string) ($item->organisation ?? $item->billing_company ?? ''));
+                $line_description = $tier_name;
+                if ($org !== '' && strcasecmp($org, $tier_name) !== 0) {
+                    $line_description = $org . ' - ' . $tier_name;
+                }
+            } else {
+                $line_description = trim(
+                    ($item->organisation ?? '') . ' - ' .
+                    ($item->first_name ?? '') . ' ' .
+                    ($item->last_name ?? '')
+                ) . ' - ' . $tier_name;
+                if ($is_free) {
+                    $line_description .= ' (included)';
+                }
+            }
 
             $line = [
                 'description' => $line_description,
                 'rate'        => $rate,
                 'quantity'    => 1,
             ];
-            if ($tax_id !== '') {
+            // Free @ 0: omit tax_id so Zoho does not require tax on a zero line
+            if ($tax_id !== '' && $rate > 0) {
                 $line['tax_id'] = $tax_id;
             }
             if ($line_account_id) {

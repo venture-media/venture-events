@@ -11,6 +11,11 @@ if (!$reg || $token === '' || !hash_equals((string) wp_hash($reg->id . '|' . $re
     wp_die('Invalid or expired ticket link.', 'Ticket', ['response' => 403]);
 }
 
+// Packages are not person tickets
+if (function_exists('ve_is_package_registration') && ve_is_package_registration($reg)) {
+    wp_die('This reference is a package purchase, not a personal ticket.', 'Ticket', ['response' => 403]);
+}
+
 $is_gate = is_user_logged_in()
     && current_user_can('read')
     && in_array('event_gate', (array) (wp_get_current_user()->roles ?? []), true);

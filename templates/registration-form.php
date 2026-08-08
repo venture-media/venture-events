@@ -76,11 +76,12 @@ foreach ($tiers as $key => $tier) {
 // (e.g. Elementor / page builders that store content outside post_content)
 ?>
 <script>
-    window.veTierOptions = <?php echo json_encode($tier_options_html); ?>;
+    window.veRegistrationMode = 'normal';
+    window.veTierOptions = <?php echo wp_json_encode($tier_options_html); ?>;
     if (!window.veGateway || !window.veGateway.nonce) {
         window.veGateway = {
-            ajax_url: <?php echo json_encode(admin_url('admin-ajax.php')); ?>,
-            nonce: <?php echo json_encode(wp_create_nonce('ve_registration_nonce')); ?>
+            ajax_url: <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>,
+            nonce: <?php echo wp_json_encode(wp_create_nonce('ve_registration_nonce')); ?>
         };
     }
 </script>
