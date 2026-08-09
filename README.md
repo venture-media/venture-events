@@ -1,3 +1,5 @@
+![Venture Events preview](docs/venture-events_preview.png)
+
 # Venture Events
 
 WordPress plugin for event registration, payment gateways, Zoho Books invoicing, and QR-code tickets.
