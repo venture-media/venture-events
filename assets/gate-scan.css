@@ -1,0 +1,213 @@
+/**
+ * Venture Events — Gate scanner
+ * Brand tokens aligned with frontend.css / venture.com.na
+ */
+
+.ve-gate-scan {
+	--ve-primary: #f4a239;
+	--ve-accent: #d1d741;
+	--ve-text: #221f21;
+	--ve-secondary: #7a7a7a;
+	--ve-surface: #ffffff;
+	--ve-surface-soft: #f7f5f0;
+	--ve-border: #d4d0c8;
+	--ve-danger: #db1277;
+	--ve-ok: #3d4a10;
+	--ve-ok-bg: rgba(209, 215, 65, 0.22);
+	--ve-err-bg: rgba(219, 18, 119, 0.08);
+	--ve-radius: 0px;
+	--ve-font: "Effra", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--ve-weight-normal: 300;
+	--ve-weight-emphasis: 400;
+
+	max-width: 480px;
+	margin: 0 auto;
+	padding: 20px 12px 48px;
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
+	line-height: 1.45;
+	-webkit-font-smoothing: antialiased;
+	box-sizing: border-box;
+}
+
+.ve-gate-scan *,
+.ve-gate-scan *::before,
+.ve-gate-scan *::after {
+	box-sizing: border-box;
+}
+
+.ve-gate-scan__header {
+	text-align: center;
+	margin-bottom: 1.25rem;
+}
+
+.ve-gate-scan__title {
+	margin: 0 0 0.35em;
+	font-size: 1.65em;
+	font-weight: var(--ve-weight-emphasis);
+	letter-spacing: 0.02em;
+	line-height: 1.2;
+	color: var(--ve-text);
+}
+
+.ve-gate-scan__event {
+	margin: 0;
+	color: var(--ve-secondary);
+	font-size: 1.05em;
+}
+
+.ve-gate-scan__notice {
+	padding: 1.1rem 1rem;
+	background: var(--ve-surface-soft);
+	border: 1px solid var(--ve-border);
+	text-align: center;
+}
+
+.ve-gate-scan__notice p {
+	margin: 0 0 0.75em;
+}
+
+.ve-gate-scan__notice p:last-child {
+	margin-bottom: 0;
+}
+
+.ve-gate-scan__controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	justify-content: center;
+	margin-bottom: 1rem;
+}
+
+.ve-gate-scan__btn {
+	display: inline-block;
+	padding: 0.9em 1.4em;
+	border-radius: var(--ve-radius);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-emphasis);
+	font-size: 1.05em;
+	letter-spacing: 0.02em;
+	line-height: 1.3;
+	cursor: pointer;
+	text-decoration: none;
+	border: 1px solid transparent;
+	transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ve-gate-scan__btn--primary {
+	background: var(--ve-accent);
+	color: #fff;
+	border-color: var(--ve-accent);
+}
+
+.ve-gate-scan__btn--primary:hover,
+.ve-gate-scan__btn--primary:focus {
+	background: #fff;
+	color: var(--ve-accent);
+	border-color: var(--ve-accent);
+	outline: none;
+}
+
+.ve-gate-scan__btn--secondary {
+	background: #fff;
+	color: var(--ve-text);
+	border-color: var(--ve-border);
+}
+
+.ve-gate-scan__btn--secondary:hover,
+.ve-gate-scan__btn--secondary:focus {
+	border-color: var(--ve-secondary);
+	outline: none;
+}
+
+.ve-gate-scan__reader-wrap {
+	margin-bottom: 1.25rem;
+}
+
+.ve-gate-scan__reader {
+	width: 100%;
+	min-height: 0;
+	overflow: hidden;
+	background: #111;
+	border: 1px solid var(--ve-border);
+}
+
+.ve-gate-scan__reader:empty {
+	min-height: 0;
+	background: transparent;
+	border: none;
+}
+
+.ve-gate-scan__reader video {
+	display: block;
+	width: 100% !important;
+	max-width: 100%;
+}
+
+.ve-gate-scan__result {
+	padding: 1.35rem 1.1rem 1.5rem;
+	text-align: center;
+	border: 1px solid var(--ve-border);
+	background: var(--ve-surface);
+}
+
+.ve-gate-scan__result--ok {
+	background: var(--ve-ok-bg);
+	border-color: var(--ve-accent);
+}
+
+.ve-gate-scan__result--error {
+	background: var(--ve-err-bg);
+	border-color: var(--ve-danger);
+}
+
+.ve-gate-scan__headline {
+	margin: 0 0 0.65em;
+	font-size: 1.85em;
+	font-weight: var(--ve-weight-emphasis);
+	line-height: 1.15;
+	letter-spacing: 0.01em;
+	color: var(--ve-text);
+}
+
+.ve-gate-scan__result--ok .ve-gate-scan__headline {
+	color: var(--ve-ok);
+}
+
+.ve-gate-scan__result--error .ve-gate-scan__headline {
+	color: var(--ve-danger);
+}
+
+.ve-gate-scan__line {
+	margin: 0.2em 0;
+	font-size: 1.15em;
+	color: var(--ve-text);
+	word-break: break-word;
+}
+
+.ve-gate-scan__tier {
+	font-weight: var(--ve-weight-emphasis);
+}
+
+.ve-gate-scan__name {
+	font-size: 1.25em;
+}
+
+.ve-gate-scan__entry {
+	margin-top: 0.45em;
+	font-size: 1.1em;
+	color: var(--ve-secondary);
+}
+
+.ve-gate-scan__msg {
+	margin-top: 0.5em;
+	color: var(--ve-secondary);
+	font-size: 1.05em;
+}
+
+/* html5-qrcode dashboard chrome — keep minimal on phones */
+#ve-gate-reader img[alt="Info icon"],
+#ve-gate-reader img[alt="Camera based scan"] {
+	display: none !important;
+}

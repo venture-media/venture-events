@@ -261,6 +261,158 @@ function ve_zoho_billing_email_from_reg($reg) {
 }
 
 /**
+ * Map ISO 3166-1 alpha-2 billing country codes to English names for Zoho Books.
+ *
+ * Zoho expects full country names on billing_address.country (e.g. "Botswana"),
+ * not ISO codes. The form stores codes (BW, NA, ZA, …). Only NA was previously
+ * expanded to "Namibia"; every other code was sent raw (e.g. "BW"), which Zoho
+ * does not treat as a real country — invoices then kept Namibia / blank.
+ *
+ * @param string $code_or_name ISO code or already-resolved name
+ * @return string Country name suitable for Zoho
+ */
+function ve_zoho_country_display_name($code_or_name) {
+    $raw = trim((string) $code_or_name);
+    if ($raw === '') {
+        return 'Namibia';
+    }
+
+    // Already a long name (or multi-word) — keep as-is
+    if (strlen($raw) > 2 && !preg_match('/^[A-Za-z]{2}$/', $raw)) {
+        return $raw;
+    }
+
+    $code = strtoupper($raw);
+    static $map = null;
+    if ($map === null) {
+        $map = [
+            'AF' => 'Afghanistan', 'AL' => 'Albania', 'DZ' => 'Algeria', 'AS' => 'American Samoa',
+            'AD' => 'Andorra', 'AO' => 'Angola', 'AI' => 'Anguilla', 'AQ' => 'Antarctica',
+            'AG' => 'Antigua and Barbuda', 'AR' => 'Argentina', 'AM' => 'Armenia', 'AW' => 'Aruba',
+            'AU' => 'Australia', 'AT' => 'Austria', 'AZ' => 'Azerbaijan', 'BS' => 'Bahamas',
+            'BH' => 'Bahrain', 'BD' => 'Bangladesh', 'BB' => 'Barbados', 'BY' => 'Belarus',
+            'BE' => 'Belgium', 'BZ' => 'Belize', 'BJ' => 'Benin', 'BM' => 'Bermuda',
+            'BT' => 'Bhutan', 'BO' => 'Bolivia', 'BA' => 'Bosnia and Herzegovina', 'BW' => 'Botswana',
+            'BR' => 'Brazil', 'IO' => 'British Indian Ocean Territory', 'VG' => 'British Virgin Islands',
+            'BN' => 'Brunei', 'BG' => 'Bulgaria', 'BF' => 'Burkina Faso', 'BI' => 'Burundi',
+            'KH' => 'Cambodia', 'CM' => 'Cameroon', 'CA' => 'Canada', 'CV' => 'Cape Verde',
+            'KY' => 'Cayman Islands', 'CF' => 'Central African Republic', 'TD' => 'Chad',
+            'CL' => 'Chile', 'CN' => 'China', 'CO' => 'Colombia', 'KM' => 'Comoros',
+            'CG' => 'Congo', 'CD' => 'Congo, Democratic Republic', 'CK' => 'Cook Islands',
+            'CR' => 'Costa Rica', 'HR' => 'Croatia', 'CU' => 'Cuba', 'CY' => 'Cyprus',
+            'CZ' => 'Czech Republic', 'DK' => 'Denmark', 'DJ' => 'Djibouti', 'DM' => 'Dominica',
+            'DO' => 'Dominican Republic', 'EC' => 'Ecuador', 'EG' => 'Egypt', 'SV' => 'El Salvador',
+            'GQ' => 'Equatorial Guinea', 'ER' => 'Eritrea', 'EE' => 'Estonia', 'ET' => 'Ethiopia',
+            'FK' => 'Falkland Islands', 'FO' => 'Faroe Islands', 'FJ' => 'Fiji', 'FI' => 'Finland',
+            'FR' => 'France', 'GF' => 'French Guiana', 'PF' => 'French Polynesia', 'GA' => 'Gabon',
+            'GM' => 'Gambia', 'GE' => 'Georgia', 'DE' => 'Germany', 'GH' => 'Ghana',
+            'GI' => 'Gibraltar', 'GR' => 'Greece', 'GL' => 'Greenland', 'GD' => 'Grenada',
+            'GP' => 'Guadeloupe', 'GU' => 'Guam', 'GT' => 'Guatemala', 'GN' => 'Guinea',
+            'GW' => 'Guinea-Bissau', 'GY' => 'Guyana', 'HT' => 'Haiti', 'HN' => 'Honduras',
+            'HK' => 'Hong Kong', 'HU' => 'Hungary', 'IS' => 'Iceland', 'IN' => 'India',
+            'ID' => 'Indonesia', 'IR' => 'Iran', 'IQ' => 'Iraq', 'IE' => 'Ireland',
+            'IL' => 'Israel', 'IT' => 'Italy', 'JM' => 'Jamaica', 'JP' => 'Japan',
+            'JO' => 'Jordan', 'KZ' => 'Kazakhstan', 'KE' => 'Kenya', 'KI' => 'Kiribati',
+            'KP' => 'Korea, North', 'KR' => 'Korea, South', 'KW' => 'Kuwait', 'KG' => 'Kyrgyzstan',
+            'LA' => 'Laos', 'LV' => 'Latvia', 'LB' => 'Lebanon', 'LS' => 'Lesotho',
+            'LR' => 'Liberia', 'LY' => 'Libya', 'LI' => 'Liechtenstein', 'LT' => 'Lithuania',
+            'LU' => 'Luxembourg', 'MO' => 'Macau', 'MK' => 'Macedonia', 'MG' => 'Madagascar',
+            'MW' => 'Malawi', 'MY' => 'Malaysia', 'MV' => 'Maldives', 'ML' => 'Mali',
+            'MT' => 'Malta', 'MH' => 'Marshall Islands', 'MQ' => 'Martinique', 'MR' => 'Mauritania',
+            'MU' => 'Mauritius', 'YT' => 'Mayotte', 'MX' => 'Mexico', 'FM' => 'Micronesia',
+            'MD' => 'Moldova', 'MC' => 'Monaco', 'MN' => 'Mongolia', 'ME' => 'Montenegro',
+            'MS' => 'Montserrat', 'MA' => 'Morocco', 'MZ' => 'Mozambique', 'MM' => 'Myanmar',
+            'NA' => 'Namibia', 'NR' => 'Nauru', 'NP' => 'Nepal', 'NL' => 'Netherlands',
+            'NC' => 'New Caledonia', 'NZ' => 'New Zealand', 'NI' => 'Nicaragua', 'NE' => 'Niger',
+            'NG' => 'Nigeria', 'NU' => 'Niue', 'NF' => 'Norfolk Island',
+            'MP' => 'Northern Mariana Islands', 'NO' => 'Norway', 'OM' => 'Oman', 'PK' => 'Pakistan',
+            'PW' => 'Palau', 'PS' => 'Palestine', 'PA' => 'Panama', 'PG' => 'Papua New Guinea',
+            'PY' => 'Paraguay', 'PE' => 'Peru', 'PH' => 'Philippines', 'PL' => 'Poland',
+            'PT' => 'Portugal', 'PR' => 'Puerto Rico', 'QA' => 'Qatar', 'RE' => 'Réunion',
+            'RO' => 'Romania', 'RU' => 'Russia', 'RW' => 'Rwanda', 'SH' => 'Saint Helena',
+            'KN' => 'Saint Kitts and Nevis', 'LC' => 'Saint Lucia',
+            'PM' => 'Saint Pierre and Miquelon', 'VC' => 'Saint Vincent and the Grenadines',
+            'WS' => 'Samoa', 'SM' => 'San Marino', 'ST' => 'São Tomé and Príncipe',
+            'SA' => 'Saudi Arabia', 'SN' => 'Senegal', 'RS' => 'Serbia', 'SC' => 'Seychelles',
+            'SL' => 'Sierra Leone', 'SG' => 'Singapore', 'SK' => 'Slovakia', 'SI' => 'Slovenia',
+            'SB' => 'Solomon Islands', 'SO' => 'Somalia', 'ZA' => 'South Africa', 'ES' => 'Spain',
+            'LK' => 'Sri Lanka', 'SD' => 'Sudan', 'SR' => 'Suriname', 'SZ' => 'Swaziland',
+            'SE' => 'Sweden', 'CH' => 'Switzerland', 'SY' => 'Syria', 'TW' => 'Taiwan',
+            'TJ' => 'Tajikistan', 'TZ' => 'Tanzania', 'TH' => 'Thailand', 'TL' => 'Timor-Leste',
+            'TG' => 'Togo', 'TK' => 'Tokelau', 'TO' => 'Tonga', 'TT' => 'Trinidad and Tobago',
+            'TN' => 'Tunisia', 'TR' => 'Turkey', 'TM' => 'Turkmenistan',
+            'TC' => 'Turks and Caicos Islands', 'TV' => 'Tuvalu', 'UG' => 'Uganda',
+            'UA' => 'Ukraine', 'AE' => 'United Arab Emirates', 'GB' => 'United Kingdom',
+            'US' => 'United States', 'UY' => 'Uruguay', 'UZ' => 'Uzbekistan', 'VU' => 'Vanuatu',
+            'VA' => 'Vatican City', 'VE' => 'Venezuela', 'VN' => 'Vietnam',
+            'VI' => 'Virgin Islands, U.S.', 'WF' => 'Wallis and Futuna', 'YE' => 'Yemen',
+            'ZM' => 'Zambia', 'ZW' => 'Zimbabwe',
+        ];
+    }
+
+    return $map[$code] ?? $raw;
+}
+
+/**
+ * Zoho billing_address object from a registration row.
+ *
+ * @param object $reg
+ * @return array{address:string,country:string}
+ */
+function ve_zoho_billing_address_from_reg($reg) {
+    $code = (string) ($reg->billing_country ?? 'NA');
+    if (trim($code) === '') {
+        $code = 'NA';
+    }
+    return [
+        'address' => (string) ($reg->billing_address ?? ''),
+        'country' => ve_zoho_country_display_name($code),
+    ];
+}
+
+/**
+ * Push current form billing address onto an existing Zoho contact (reuse path).
+ *
+ * Without this, re-used WEB_POS customers keep their old country (often Namibia)
+ * even when the new ticket is zero-rated for Botswana / export.
+ */
+function ve_zoho_sync_contact_billing_address($token, $org_id, $contact_id, $reg) {
+    $contact_id = (string) $contact_id;
+    if ($contact_id === '' || !$token || !$org_id) {
+        return;
+    }
+
+    $payload = [
+        'billing_address' => ve_zoho_billing_address_from_reg($reg),
+    ];
+
+    $response = wp_remote_request(
+        ve_zoho_books_url('/contacts/' . rawurlencode($contact_id), [], $org_id),
+        [
+            'method'  => 'PUT',
+            'timeout' => 30,
+            'headers' => [
+                'Authorization' => 'Zoho-oauthtoken ' . $token,
+                'Content-Type'  => 'application/json',
+            ],
+            'body' => wp_json_encode($payload),
+        ]
+    );
+
+    if (is_wp_error($response)) {
+        error_log('Venture Events Zoho: billing address sync WP_Error: ' . $response->get_error_message());
+        return;
+    }
+
+    $http = wp_remote_retrieve_response_code($response);
+    $body = wp_remote_retrieve_body($response);
+    error_log(
+        "Venture Events Zoho: billing address sync contact_id={$contact_id} HTTP {$http} | "
+        . 'country=' . ($payload['billing_address']['country'] ?? '') . ' | ' . $body
+    );
+}
+
+/**
  * Contact person first/last name from registration (Accounts Payable fallback).
  *
  * @return array{0:string,1:string} [first_name, last_name]
@@ -615,6 +767,8 @@ function ve_zoho_get_or_create_contact($reg) {
     }
 
     $finish = function ($contact_id) use ($token, $org_id, $reg, $email) {
+        // Always refresh address from this checkout (country must not stick on Namibia)
+        ve_zoho_sync_contact_billing_address($token, $org_id, $contact_id, $reg);
         $person_id = ve_zoho_upsert_contact_person($token, $org_id, $contact_id, $reg);
         if (!$person_id) {
             error_log("Venture Events Zoho: ❌ No contact_person_id after upsert for contact_id={$contact_id}");
@@ -628,7 +782,7 @@ function ve_zoho_get_or_create_contact($reg) {
 
     $existing_contact_id = ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email);
     if ($existing_contact_id) {
-        error_log("Venture Events Zoho: Reusing WEB_POS contact_id={$existing_contact_id} — updating sole contact person");
+        error_log("Venture Events Zoho: Reusing WEB_POS contact_id={$existing_contact_id} — updating address + sole contact person");
         return $finish($existing_contact_id);
     }
 
@@ -639,10 +793,7 @@ function ve_zoho_get_or_create_contact($reg) {
         'company_name'    => $reg->billing_company ?: $base_name,
         'email'           => $email,
         'phone'           => $reg->phone ?? '',
-        'billing_address' => [
-            'address' => $reg->billing_address ?? '',
-            'country' => ($reg->billing_country === 'NA') ? 'Namibia' : ($reg->billing_country ?? 'Namibia'),
-        ],
+        'billing_address' => ve_zoho_billing_address_from_reg($reg),
         'contact_type'    => 'customer',
     ];
 
@@ -792,7 +943,11 @@ function ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id) {
 }
 
 /**
- * Generate Zoho Books Invoice (called ONLY after successful payment)
+ * Generate Zoho Books Invoice — ONLY after successful gateway payment.
+ *
+ * HARD GATE (Leon / D20): Never create a Zoho invoice of any status (including draft)
+ * unless every registration for the payment_reference is status=paid with paid_at set.
+ * Do not call this from checkout, pending save, or complimentary flows.
  *
  * @param object      $reg
  * @param int         $event_id
@@ -805,6 +960,43 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
     if (!$token || !$org_id) {
         error_log('Venture Events: Zoho token or org_id missing for invoice');
         return false;
+    }
+
+    // --- Payment confirmation gate (no draft invoices without paid regs) ---
+    $payment_reference = trim((string) ($reg->payment_reference ?? $reg->internal_reference ?? ''));
+    if ($payment_reference === '') {
+        error_log('Venture Events Zoho: ❌ Refusing invoice create — missing payment_reference on registration');
+        return false;
+    }
+
+    if (function_exists('ve_payment_reference_fully_paid') && !ve_payment_reference_fully_paid($payment_reference)) {
+        error_log(
+            "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — "
+            . "not fully paid in ve_registrations (status=paid + paid_at required for all rows)"
+        );
+        return false;
+    }
+
+    // Prefer DB-paid line items so draft payload cannot use pending rows
+    if (function_exists('ve_get_paid_registrations_by_reference')) {
+        $paid_lines = ve_get_paid_registrations_by_reference($payment_reference);
+        if (empty($paid_lines)) {
+            error_log(
+                "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — no paid rows"
+            );
+            return false;
+        }
+        $reg = $paid_lines[0];
+        $reg->line_items = $paid_lines;
+    } else {
+        // Fallback: single-row must itself be paid
+        if ((string) ($reg->status ?? '') !== 'paid' || empty($reg->paid_at)) {
+            error_log(
+                "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — "
+                . "registration #{$reg->id} is not paid"
+            );
+            return false;
+        }
     }
 
     $billing_email     = ve_zoho_billing_email_from_reg($reg);
@@ -862,12 +1054,11 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
             $rate = (float) $item->price;
 
             $is_namibia = (strtoupper($reg->billing_country ?? 'NA') === 'NA');
-            $tax_id = ve_zoho_resolve_tax_id($is_namibia);
-
-            // Zero-rated free included tickets stay at 0; do not invent tax on free lines.
-            if ($is_namibia && $rate > 0) {
-                $rate = round($rate / 1.15, 2);
-            }
+            // NA ticket prices are VAT-inclusive 15%. Zoho gets exclusive rate + tax_id
+            // so the VAT line appears and the total matches the amount charged.
+            $built = ve_zoho_build_line_rate_and_tax($rate, $is_namibia);
+            $rate   = $built['rate'];
+            $tax_id = $built['tax_id'];
 
             $tier_name = function_exists('ve_registration_tier_label')
                 ? ve_registration_tier_label($item)
@@ -894,15 +1085,13 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
                 }
             }
 
+            // Always include tax_id (original behaviour — never omit)
             $line = [
                 'description' => $line_description,
                 'rate'        => $rate,
                 'quantity'    => 1,
+                'tax_id'      => $tax_id,
             ];
-            // Free @ 0: omit tax_id so Zoho does not require tax on a zero line
-            if ($tax_id !== '' && $rate > 0) {
-                $line['tax_id'] = $tax_id;
-            }
             if ($line_account_id) {
                 $line['account_id'] = $line_account_id;
             }
@@ -920,33 +1109,31 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
         ) . ' - ' . $tier_name;
 
         $is_namibia = (strtoupper($reg->billing_country ?? 'NA') === 'NA');
-        $rate = (float) ($reg->price ?? 0);
-        $tax_id = ve_zoho_resolve_tax_id($is_namibia);
-
-        if ($is_namibia) {
-            $rate = round($rate / 1.15, 2);
-        }
+        $built      = ve_zoho_build_line_rate_and_tax((float) ($reg->price ?? 0), $is_namibia);
+        $rate       = $built['rate'];
+        $tax_id     = $built['tax_id'];
 
         $line = [
             'description' => $line_description,
             'rate'        => $rate,
             'quantity'    => 1,
+            'tax_id'      => $tax_id,
         ];
-        if ($tax_id !== '') {
-            $line['tax_id'] = $tax_id;
-        }
         if ($line_account_id) {
             $line['account_id'] = $line_account_id;
         }
         $zoho_line_items[] = $line;
     }
 
-    // Always create the invoice after payment. Contact person / email are best-effort.
+    // Create invoice only after payment gate above. Starts as draft, then sent + paid + emailed (D19).
+    // Contact person / email are best-effort after the Paid local rows exist.
+    // billing_address on the invoice so PDF country matches this checkout (not a stale contact).
     $payload = [
         'customer_id'      => $contact_id,
         'date'             => date('Y-m-d'),
         'status'           => 'draft',
         'line_items'       => $zoho_line_items,
+        'billing_address'  => ve_zoho_billing_address_from_reg($reg),
         'notes'            => 'Ref: ' . ($reg->internal_reference ?? $reg->payment_reference ?? '') . "\n" . ($reg->billing_notes ?? ''),
         'reference_number' => ve_zoho_build_invoice_reference($event_title, $reg),
     ];
@@ -1027,60 +1214,54 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
         ? round((float) $body['invoice']['balance'], 2)
         : $total_amount;
 
-    // Best-effort email to accounting_email (successful email also marks sent in Zoho).
-    // Invoice already exists either way.
-    $emailed = false;
-    if ($billing_email !== '') {
-        $emailed = ve_zoho_email_invoice($token, $org_id, $invoice_id, $invoice_number, $billing_email);
-    }
-
-    if (!$emailed) {
-        // Open invoice for payment even if email failed/skipped (status only — not a second email)
-        $marked = ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id);
-        if (is_array($marked)) {
-            if ($marked['balance'] !== null) {
-                $balance = $marked['balance'];
-            }
-            if ($marked['total'] !== null) {
-                $total_amount = $marked['total'];
-            }
+    // LOCKED order (Leon): create draft → mark sent (no email) → record payment → email.
+    // Never email the invoice while it is still unpaid. Zoho's /email also marks sent;
+    // we mark sent first without mail so payment can apply, then email the Paid PDF.
+    $marked = ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id);
+    if (is_array($marked)) {
+        if ($marked['balance'] !== null) {
+            $balance = $marked['balance'];
         }
-        if ($billing_email === '') {
-            error_log("Venture Events Zoho: ⚠ Invoice {$invoice_number} created but not emailed (no accounting email)");
-        } else {
-            error_log(
-                "Venture Events Zoho: ⚠ Invoice {$invoice_number} was marked sent but EMAIL FAILED — "
-                . "recipient was {$billing_email}; check Zoho mail settings / debug.log"
-            );
-        }
-    } else {
-        // Refresh totals after email may have updated status/balance
-        $after_mail = ve_zoho_get_invoice($token, $org_id, $invoice_id);
-        if ($after_mail) {
-            if (isset($after_mail['balance'])) {
-                $balance = round((float) $after_mail['balance'], 2);
-            }
-            if (isset($after_mail['total'])) {
-                $total_amount = round((float) $after_mail['total'], 2);
-            }
+        if ($marked['total'] !== null) {
+            $total_amount = $marked['total'];
         }
     }
 
     $payment_amount = $balance > 0 ? $balance : $total_amount;
     $payment_amount = round((float) $payment_amount, 2);
 
-    $paid_ok = ve_zoho_record_customer_payment(
-        $token,
-        $org_id,
-        $contact_id,
-        $invoice_id,
-        $invoice_number,
-        $payment_amount,
-        $reg
-    );
+    $paid_ok = true;
+    if ($payment_amount > 0) {
+        $paid_ok = ve_zoho_record_customer_payment(
+            $token,
+            $org_id,
+            $contact_id,
+            $invoice_id,
+            $invoice_number,
+            $payment_amount,
+            $reg
+        );
+        if (!$paid_ok) {
+            error_log(
+                "Venture Events Zoho: Invoice {$invoice_number} remains unpaid after payment attempts — "
+                . "NOT emailing invoice until Paid. Check OAuth scopes / debug.log"
+            );
+        }
+    } else {
+        error_log("Venture Events Zoho: Invoice {$invoice_number} total/balance is 0 — skip customer payment");
+    }
 
-    if (!$paid_ok) {
-        error_log("Venture Events Zoho: Invoice {$invoice_number} remains unpaid after payment attempts — check OAuth scopes / debug.log");
+    // Email only after payment succeeded (or zero-amount invoice). Customer must not get an unpaid invoice.
+    if ($paid_ok && $billing_email !== '') {
+        $emailed = ve_zoho_email_invoice($token, $org_id, $invoice_id, $invoice_number, $billing_email);
+        if (!$emailed) {
+            error_log(
+                "Venture Events Zoho: ⚠ Invoice {$invoice_number} is Paid but EMAIL FAILED — "
+                . "recipient was {$billing_email}; check Zoho mail settings / debug.log"
+            );
+        }
+    } elseif ($billing_email === '') {
+        error_log("Venture Events Zoho: ⚠ Invoice {$invoice_number} created but not emailed (no accounting email)");
     }
 
     $verify = ve_zoho_get_invoice($token, $org_id, $invoice_id);
@@ -1106,18 +1287,136 @@ function ve_zoho_get_invoice($token, $org_id, $invoice_id) {
 }
 
 /**
- * Resolve Zoho tax_id for a line item from settings (org-specific IDs).
+ * Resolve Zoho tax_id for a line item.
  *
- * Settings (leave empty to omit tax_id and let Zoho use its defaults):
- * - ve_zoho_tax_id_domestic  — e.g. Namibia / domestic VAT-inclusive tickets
- * - ve_zoho_tax_id_export    — e.g. non-domestic / export
+ * ORIGINAL Venture org IDs (from pre-refactor ve-zoho — DO NOT remove without Leon):
+ * - Domestic (Namibia 15% VAT): 2737296000000102001
+ * - Export / non-domestic:      2737296000000102009
+ *
+ * Optional WP overrides (Events → Zoho Settings) only if non-empty; otherwise these defaults.
  *
  * @param bool $is_domestic Whether billing country is treated as domestic (default NA).
- * @return string tax_id or empty string
+ * @return string tax_id (never empty for this org)
  */
 function ve_zoho_resolve_tax_id($is_domestic) {
+    // Hardcoded defaults from original plugin — this is what made VAT lines work.
+    $default = $is_domestic ? '2737296000000102001' : '2737296000000102009';
+
     $option = $is_domestic ? 've_zoho_tax_id_domestic' : 've_zoho_tax_id_export';
-    return trim((string) get_option($option, ''));
+    $override = trim((string) get_option($option, ''));
+    return $override !== '' ? $override : $default;
+}
+
+/**
+ * List taxes from Zoho Books (Settings → Taxes) for admin setup.
+ *
+ * GET /books/v3/settings/taxes
+ *
+ * @return array{ok:bool, lines:string[], taxes?:array<int,array>}
+ */
+function ve_zoho_list_taxes() {
+    $lines = [];
+    $token = ve_get_zoho_token();
+    $org   = get_option('ve_zoho_org_id');
+
+    $lines[] = 'API base: ' . ve_zoho_api_base();
+    $lines[] = 'Organization ID: ' . ($org ?: '(empty)');
+    $lines[] = 'Token: ' . ($token ? 'OK' : 'FAILED');
+
+    if (!$token || !$org) {
+        $lines[] = 'Cannot list taxes without token + org_id.';
+        return ['ok' => false, 'lines' => $lines, 'taxes' => []];
+    }
+
+    $url = ve_zoho_books_url('/settings/taxes', [], $org);
+    $response = wp_remote_get($url, [
+        'timeout' => 45,
+        'headers' => ['Authorization' => 'Zoho-oauthtoken ' . $token],
+    ]);
+
+    if (is_wp_error($response)) {
+        $lines[] = 'Error: ' . $response->get_error_message();
+        return ['ok' => false, 'lines' => $lines, 'taxes' => []];
+    }
+
+    $http = wp_remote_retrieve_response_code($response);
+    $raw  = wp_remote_retrieve_body($response);
+    $body = json_decode($raw, true);
+    $lines[] = "HTTP {$http}";
+
+    if ($http < 200 || $http >= 300 || !is_array($body)) {
+        $lines[] = 'Failed to list taxes. Body: ' . $raw;
+        return ['ok' => false, 'lines' => $lines, 'taxes' => []];
+    }
+
+    $taxes = [];
+    if (!empty($body['taxes']) && is_array($body['taxes'])) {
+        $taxes = $body['taxes'];
+    } elseif (!empty($body['tax']) && is_array($body['tax'])) {
+        $taxes = [$body['tax']];
+    }
+
+    $lines[] = 'Found ' . count($taxes) . ' tax record(s).';
+    $lines[] = '';
+    $lines[] = sprintf('%-36s  %6s  %s', 'tax_id', 'pct', 'name');
+    $lines[] = str_repeat('-', 72);
+
+    $suggest_domestic = '';
+    foreach ($taxes as $t) {
+        if (!is_array($t)) {
+            continue;
+        }
+        $id   = (string) ($t['tax_id'] ?? $t['tax_authority_id'] ?? '');
+        $name = (string) ($t['tax_name'] ?? $t['name'] ?? '');
+        $pct  = isset($t['tax_percentage']) ? (float) $t['tax_percentage'] : (isset($t['percentage']) ? (float) $t['percentage'] : null);
+        $pct_s = $pct === null ? '?' : rtrim(rtrim(number_format($pct, 2, '.', ''), '0'), '.');
+        $lines[] = sprintf('%-36s  %5s%%  %s', $id !== '' ? $id : '(no id)', $pct_s, $name);
+
+        // Prefer 15% for Namibia domestic VAT suggestion
+        if ($suggest_domestic === '' && $id !== '' && $pct !== null && abs($pct - 15.0) < 0.01) {
+            $suggest_domestic = $id;
+        }
+    }
+
+    $current = trim((string) get_option('ve_zoho_tax_id_domestic', ''));
+    $effective = ve_zoho_resolve_tax_id(true);
+    $lines[] = '';
+    $lines[] = 'Override option ve_zoho_tax_id_domestic: ' . ($current !== '' ? $current : '(empty — using original default)');
+    $lines[] = 'Effective Domestic tax_id used on invoices: ' . $effective;
+    if ($suggest_domestic !== '') {
+        $lines[] = 'Zoho 15% tax_id from API: ' . $suggest_domestic;
+        if ($suggest_domestic !== $effective) {
+            $lines[] = 'NOTE: API 15% id differs from effective default — only override if Leon confirms.';
+        }
+    }
+
+    return ['ok' => true, 'lines' => $lines, 'taxes' => $taxes, 'suggest_domestic' => $suggest_domestic];
+}
+
+/**
+ * Build Zoho line rate + tax_id from a stored ticket price.
+ *
+ * Matches ORIGINAL logic (venture-events original / pre-settings refactor):
+ * - Namibia: exclusive rate = price / 1.15, tax_id = domestic 15%
+ * - Non-NA: full price, tax_id = export
+ * - tax_id is ALWAYS set on the line (never omit — omitting caused NAD739.13 no VAT)
+ *
+ * @param float $inclusive_price Stored registration price (VAT-in for NA).
+ * @param bool  $is_namibia      Billing country is NA.
+ * @return array{rate: float, tax_id: string}
+ */
+function ve_zoho_build_line_rate_and_tax($inclusive_price, $is_namibia) {
+    $rate   = round((float) $inclusive_price, 2);
+    $tax_id = ve_zoho_resolve_tax_id((bool) $is_namibia);
+
+    if ($is_namibia) {
+        $rate = round($rate / 1.15, 2);
+    }
+
+    return [
+        'rate'   => $rate,
+        'tax_id' => $tax_id,
+    ];
 }
 
 /**
@@ -1231,25 +1530,18 @@ function ve_zoho_resolve_line_account_id($token, $org_id) {
 }
 
 /**
- * Build invoice reference_number (often visible on related journals).
- * Uses event title + payment/internal ref only.
+ * Build invoice reference_number (Zoho UI often labels this P.O.#).
+ *
+ * LOCKED (Leon): PO / reference_number must be **event title only**.
+ * Do not append payment_reference, internal_reference, or any other string.
+ * Ticket refs belong in notes (and customer payment reference), not the PO field.
+ *
+ * @param string      $event_title Event post title.
+ * @param object|null $reg         Unused; kept for call-site compatibility.
  */
 function ve_zoho_build_invoice_reference($event_title, $reg = null) {
-    $event_title = trim((string) $event_title);
-    $pay_ref = '';
-    if ($reg) {
-        $pay_ref = trim((string) ($reg->internal_reference ?? $reg->payment_reference ?? ''));
-    }
-
-    $parts = [];
-    if ($event_title !== '') {
-        $parts[] = $event_title;
-    }
-    if ($pay_ref !== '') {
-        $parts[] = $pay_ref;
-    }
-
-    $ref = implode(' — ', $parts);
+    unset($reg); // intentionally unused — PO is event title only
+    $ref = trim((string) $event_title);
     // Zoho reference_number max length is typically 100
     if (strlen($ref) > 100) {
         $ref = substr($ref, 0, 97) . '...';

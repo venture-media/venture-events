@@ -19,6 +19,7 @@ $normal_tiers  = ve_get_event_tiers($event_id);
 
 // Package options for the top selector (Select is empty default)
 $package_options_html = '<option value="">Select</option>';
+$any_package_in_stock  = false;
 foreach ($special_tiers as $key => $tier) {
     if (!is_array($tier)) {
         continue;
@@ -35,15 +36,37 @@ foreach ($special_tiers as $key => $tier) {
         $free_name = (string) $normal_tiers[$free_key]['name'];
     }
 
+    $cap       = max(0, (int) ($tier['available'] ?? 0));
+    $remaining = function_exists('ve_get_special_tier_remaining')
+        ? ve_get_special_tier_remaining($event_id, (string) $key)
+        : null;
+    $sold_out  = ($remaining !== null && $remaining < 1);
+    if (!$sold_out) {
+        $any_package_in_stock = true;
+    }
+
+    $label = $name . ' — N$ ' . number_format($price, 2);
+    if ($cap > 0) {
+        if ($sold_out) {
+            $label .= ' (Sold out)';
+        } elseif ($remaining === 1) {
+            $label .= ' (1 left)';
+        } else {
+            $label .= ' (' . (int) $remaining . ' left)';
+        }
+    }
+
     $package_options_html .= sprintf(
-        '<option value="%s" data-price="%s" data-free-tickets="%d" data-free-tier-key="%s" data-free-tier-name="%s">%s — N$ %s</option>',
+        '<option value="%s" data-price="%s" data-free-tickets="%d" data-free-tier-key="%s" data-free-tier-name="%s" data-available="%d" data-remaining="%s"%s>%s</option>',
         esc_attr($key),
         esc_attr($price),
         $free_count,
         esc_attr($free_key),
         esc_attr($free_name),
-        esc_html($name),
-        esc_html(number_format($price, 2))
+        $cap,
+        $remaining === null ? '' : (string) (int) $remaining,
+        $sold_out ? ' disabled' : '',
+        esc_html($label)
     );
 }
 
@@ -75,12 +98,20 @@ foreach ($special_tiers as $key => $tier) {
     if ($free_count > 0 && $free_key !== '' && isset($normal_tiers[$free_key]['name'])) {
         $free_name = (string) $normal_tiers[$free_key]['name'];
     }
+    $cap       = max(0, (int) ($tier['available'] ?? 0));
+    $remaining = function_exists('ve_get_special_tier_remaining')
+        ? ve_get_special_tier_remaining($event_id, (string) $key)
+        : null;
     $special_js[$key] = [
         'name'            => $name,
         'price'           => $price,
         'free_tickets'    => $free_count,
         'free_tier_key'   => $free_key,
         'free_tier_name'  => $free_name,
+        'available'       => $cap,
+        // null = unlimited; 0 = sold out
+        'remaining'       => $remaining,
+        'sold_out'        => ($remaining !== null && $remaining < 1),
     ];
 }
 ?>
@@ -95,11 +126,18 @@ foreach ($special_tiers as $key => $tier) {
         <div class="ve-package-section">
             <p>
                 <label for="ve-special-tier-select">Package <span class="ve-required">*</span></label><br>
-                <select id="ve-special-tier-select" required>
+                <select id="ve-special-tier-select" required<?php echo empty($special_js) || !$any_package_in_stock ? ' disabled' : ''; ?>>
                     <?php echo $package_options_html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — built with esc_* above ?>
                 </select>
             </p>
-            <p class="ve-hint ve-package-hint">Select a package to continue. Included free tickets (if any) and optional extra tickets will appear below.</p>
+            <?php if (empty($special_js)): ?>
+                <p class="ve-error">No packages are configured for this event.</p>
+            <?php elseif (!$any_package_in_stock): ?>
+                <p class="ve-error">All packages are currently sold out.</p>
+            <?php else: ?>
+                <p class="ve-hint ve-package-hint">Select a package to continue. Included free tickets (if any) and optional extra tickets will appear below.</p>
+            <?php endif; ?>
+            <p id="ve-package-stock-hint" class="ve-hint" hidden></p>
         </div>
 
         <div id="ve-special-body" class="ve-special-body" hidden>

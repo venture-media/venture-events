@@ -7,7 +7,10 @@ $id    = isset($_GET['id']) ? absint(wp_unslash($_GET['id'])) : 0;
 $token = isset($_GET['token']) ? sanitize_text_field(wp_unslash($_GET['token'])) : '';
 
 $reg = $id ? ve_get_registration($id) : null;
-if (!$reg || $token === '' || !hash_equals((string) wp_hash($reg->id . '|' . $reg->email), $token)) {
+$token_ok = $reg && function_exists('ve_verify_ticket_token')
+    ? ve_verify_ticket_token($reg, $token)
+    : ($reg && $token !== '' && hash_equals((string) wp_hash($reg->id . '|' . $reg->email), $token));
+if (!$reg || !$token_ok) {
     wp_die('Invalid or expired ticket link.', 'Ticket', ['response' => 403]);
 }
 
@@ -16,13 +19,18 @@ if (function_exists('ve_is_package_registration') && ve_is_package_registration(
     wp_die('This reference is a package purchase, not a personal ticket.', 'Ticket', ['response' => 403]);
 }
 
-$is_gate = is_user_logged_in()
-    && current_user_can('read')
-    && in_array('event_gate', (array) (wp_get_current_user()->roles ?? []), true);
+// Prefer the dedicated gate scanner shortcode for door staff.
+// Keep legacy check-in on this page if a Gate (or admin) user opens the ticket URL while logged in.
+$is_gate = function_exists('ve_user_can_gate_scan')
+    ? ve_user_can_gate_scan()
+    : (is_user_logged_in()
+        && in_array('event_gate', (array) (wp_get_current_user()->roles ?? []), true));
 
 if ($is_gate && empty($reg->entered_at) && function_exists('ve_mark_as_entered')) {
-    ve_mark_as_entered($reg->id);
-    $reg = ve_get_registration($id); // refresh
+    if ((string) ($reg->status ?? '') === 'paid') {
+        ve_mark_as_entered($reg->id, get_current_user_id());
+        $reg = ve_get_registration($id); // refresh
+    }
 }
 
 $status = '';

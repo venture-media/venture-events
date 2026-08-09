@@ -140,9 +140,18 @@ class VE_Guest_List_Table extends WP_List_Table {
                 return '<strong style="color:' . $color . ';">' . esc_html(ucfirst($status)) . '</strong>';
 
             case 'entered_at':
-                return $item->entered_at 
-                    ? date('d M Y H:i', strtotime($item->entered_at)) 
-                    : '<span style="color:#999;">Not entered</span>';
+                if (empty($item->entered_at)) {
+                    return '<span style="color:#999;">Not entered</span>';
+                }
+                $when = date('d M Y H:i', strtotime($item->entered_at));
+                $by   = '';
+                if (!empty($item->entered_by) && function_exists('ve_gate_user_display_name')) {
+                    $by = ve_gate_user_display_name((int) $item->entered_by);
+                }
+                if ($by !== '') {
+                    return esc_html($when . ' · ' . $by);
+                }
+                return esc_html($when);
 
             case 'created_at':
                 return date('d M Y H:i', strtotime($item->created_at));

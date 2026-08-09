@@ -3,8 +3,13 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Venture Events Core Functions
- * Version: 0.9.8
+ * Version: 0.9.21.0
  */
+
+/** Hours a pending (unpaid) registration may sit before automatic deletion. */
+if (!defined('VE_PENDING_TTL_HOURS')) {
+    define('VE_PENDING_TTL_HOURS', 24);
+}
 
 // ====================== DATABASE SETUP ======================
 function ve_create_tables() {
@@ -32,6 +37,7 @@ function ve_create_tables() {
         invoice_number varchar(50) DEFAULT NULL,
         paid_at datetime DEFAULT NULL,
         entered_at datetime DEFAULT NULL,
+        entered_by bigint(20) unsigned DEFAULT NULL,
         qr_url varchar(255) DEFAULT NULL,
         billing_company varchar(200) DEFAULT NULL,
         billing_address text DEFAULT NULL,
@@ -64,7 +70,8 @@ function ve_create_tables() {
         'invoice_number'     => "ALTER TABLE $table_name ADD COLUMN invoice_number varchar(50) DEFAULT NULL AFTER transaction_id",
         'paid_at'            => "ALTER TABLE $table_name ADD COLUMN paid_at datetime DEFAULT NULL AFTER invoice_number",
         'entered_at'         => "ALTER TABLE $table_name ADD COLUMN entered_at datetime DEFAULT NULL AFTER paid_at",
-        'qr_url'             => "ALTER TABLE $table_name ADD COLUMN qr_url varchar(255) DEFAULT NULL AFTER entered_at",
+        'entered_by'         => "ALTER TABLE $table_name ADD COLUMN entered_by bigint(20) unsigned DEFAULT NULL AFTER entered_at",
+        'qr_url'             => "ALTER TABLE $table_name ADD COLUMN qr_url varchar(255) DEFAULT NULL AFTER entered_by",
         'internal_reference' => "ALTER TABLE $table_name ADD COLUMN internal_reference varchar(100) DEFAULT NULL AFTER qr_url",
         'sage_invoice'       => "ALTER TABLE $table_name ADD COLUMN sage_invoice varchar(100) DEFAULT NULL AFTER internal_reference",
     ];
@@ -125,7 +132,7 @@ function ve_get_event_tiers($event_id) {
  * Special package tiers for an event.
  *
  * @param int $event_id
- * @return array<string,array{name:string,price:float,free_tickets:int,free_tier_key:string}>
+ * @return array<string,array{name:string,price:float,free_tickets:int,free_tier_key:string,available:int}>
  */
 function ve_get_special_tiers($event_id) {
     $tiers = get_post_meta((int) $event_id, '_ve_special_tiers', true);
@@ -137,7 +144,7 @@ function ve_get_special_tiers($event_id) {
  *
  * @param int    $event_id
  * @param string $key
- * @return array{name:string,price:float,free_tickets:int,free_tier_key:string}|null
+ * @return array{name:string,price:float,free_tickets:int,free_tier_key:string,available:int}|null
  */
 function ve_get_special_tier($event_id, $key) {
     $key   = (string) $key;
@@ -151,7 +158,74 @@ function ve_get_special_tier($event_id, $key) {
         'price'         => (float) ($t['price'] ?? 0),
         'free_tickets'  => max(0, (int) ($t['free_tickets'] ?? 0)),
         'free_tier_key' => (string) ($t['free_tier_key'] ?? ''),
+        // 0 = unlimited (legacy packages without a cap)
+        'available'     => max(0, (int) ($t['available'] ?? 0)),
     ];
+}
+
+/**
+ * How many package rows are already taken for a special tier.
+ *
+ * Counts paid + pending package lines only (one package per order).
+ * Pending holds stock until paid or cleaned up by the 24h TTL.
+ *
+ * @param int    $event_id
+ * @param string $special_key
+ * @return int
+ */
+function ve_count_special_tier_sold($event_id, $special_key) {
+    global $wpdb;
+    $event_id     = absint($event_id);
+    $special_key  = sanitize_text_field((string) $special_key);
+    if ($event_id < 1 || $special_key === '') {
+        return 0;
+    }
+    $table = $wpdb->prefix . 've_registrations';
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table
+         WHERE event_id = %d
+           AND line_type = 'package'
+           AND special_tier_key = %s
+           AND status IN ('pending', 'paid')",
+        $event_id,
+        $special_key
+    ));
+}
+
+/**
+ * Remaining units for a special package, or null if unlimited.
+ *
+ * @param int    $event_id
+ * @param string $special_key
+ * @param array|null $package Optional pre-loaded tier from ve_get_special_tier()
+ * @return int|null null = unlimited
+ */
+function ve_get_special_tier_remaining($event_id, $special_key, $package = null) {
+    if ($package === null) {
+        $package = ve_get_special_tier($event_id, $special_key);
+    }
+    if (!$package) {
+        return 0;
+    }
+    $cap = max(0, (int) ($package['available'] ?? 0));
+    if ($cap < 1) {
+        return null; // unlimited
+    }
+    $sold = ve_count_special_tier_sold($event_id, $special_key);
+    return max(0, $cap - $sold);
+}
+
+/**
+ * Whether at least one unit of the package can still be purchased.
+ *
+ * @param int    $event_id
+ * @param string $special_key
+ * @param array|null $package
+ * @return bool
+ */
+function ve_special_tier_has_stock($event_id, $special_key, $package = null) {
+    $remaining = ve_get_special_tier_remaining($event_id, $special_key, $package);
+    return $remaining === null || $remaining > 0;
 }
 
 /**
@@ -194,6 +268,65 @@ function ve_generate_payment_reference() {
     $next       = (int) get_option($option_key, 0) + 1;
     update_option($option_key, $next, false);
     return 'VE-' . $today . '-' . str_pad((string) $next, 4, '0', STR_PAD_LEFT);
+}
+
+/** Hardcoded tier key for complimentary tickets (not an event meta tier). */
+if (!defined('VE_COMPLIMENTARY_TIER_KEY')) {
+    define('VE_COMPLIMENTARY_TIER_KEY', 'complimentary');
+}
+if (!defined('VE_COMPLIMENTARY_TIER_NAME')) {
+    define('VE_COMPLIMENTARY_TIER_NAME', 'Complimentary Pass');
+}
+
+/**
+ * Whether the current user may issue complimentary tickets (administrator).
+ *
+ * @return bool
+ */
+function ve_user_can_issue_complimentary() {
+    return is_user_logged_in() && current_user_can('manage_options');
+}
+
+/**
+ * Issuer label for complimentary Internal Ref: first name, else username.
+ *
+ * @param int|null $user_id
+ * @return string Safe alphanumeric slug for refs (e.g. Leon)
+ */
+function ve_complimentary_issuer_label($user_id = null) {
+    $user = $user_id ? get_userdata((int) $user_id) : wp_get_current_user();
+    if (!$user || !$user->ID) {
+        return 'Admin';
+    }
+
+    $first = trim((string) ($user->first_name ?? ''));
+    $raw   = $first !== '' ? $first : (string) $user->user_login;
+    $label = preg_replace('/[^A-Za-z0-9]+/', '', $raw);
+    if ($label === '' || $label === null) {
+        $label = 'Admin';
+    }
+
+    // Cap length so refs stay readable in the guest list
+    return substr($label, 0, 24);
+}
+
+/**
+ * Complimentary batch reference: {FirstName}-{YYYYMMDD}-{NNNN}
+ * Matches paid refs (VE-20260809-0001) → e.g. Leon-20260809-0001.
+ * Sequence is per admin, per calendar day.
+ *
+ * @param int|null $user_id
+ * @return string
+ */
+function ve_generate_complimentary_reference($user_id = null) {
+    $user_id = $user_id ? (int) $user_id : get_current_user_id();
+    $name    = ve_complimentary_issuer_label($user_id);
+    $date    = date('Ymd'); // e.g. 20260809 (same as paid VE- refs)
+    $key     = 've_last_comp_ref_' . $user_id . '_' . $date;
+    $next    = (int) get_option($key, 0) + 1;
+    update_option($key, $next, false);
+
+    return $name . '-' . $date . '-' . str_pad((string) $next, 4, '0', STR_PAD_LEFT);
 }
 
 /**
@@ -281,6 +414,68 @@ function ve_create_roles() {
     }
 }
 
+/**
+ * True when the user has the Event Gate role and is not a full admin.
+ * Used to hide the admin bar and block wp-admin (scanner AJAX still allowed).
+ *
+ * @param int|null $user_id
+ * @return bool
+ */
+function ve_user_is_gate_staff($user_id = null) {
+    if ($user_id === null) {
+        if (!is_user_logged_in()) {
+            return false;
+        }
+        $user = wp_get_current_user();
+    } else {
+        $user = get_userdata((int) $user_id);
+    }
+    if (!$user || empty($user->ID)) {
+        return false;
+    }
+    // Administrators / anyone who can manage the site keep full access.
+    if (user_can($user, 'manage_options')) {
+        return false;
+    }
+    $roles = (array) ($user->roles ?? []);
+    return in_array('event_gate', $roles, true);
+}
+
+/**
+ * Hide the WP admin bar for Gate staff (frontend + would-be admin).
+ */
+add_filter('show_admin_bar', 've_hide_admin_bar_for_gate_staff');
+function ve_hide_admin_bar_for_gate_staff($show) {
+    if (ve_user_is_gate_staff()) {
+        return false;
+    }
+    return $show;
+}
+
+/**
+ * Block wp-admin for Gate staff. Keep admin-ajax.php (and admin-post.php)
+ * so the gate scanner AJAX check-in still works.
+ */
+add_action('admin_init', 've_block_admin_for_gate_staff');
+function ve_block_admin_for_gate_staff() {
+    if (!ve_user_is_gate_staff()) {
+        return;
+    }
+
+    // Allow AJAX / form handlers used from the front end.
+    if (wp_doing_ajax()) {
+        return;
+    }
+    global $pagenow;
+    if (in_array((string) $pagenow, ['admin-ajax.php', 'admin-post.php'], true)) {
+        return;
+    }
+
+    // No backend access — send them to the front of the site.
+    wp_safe_redirect(home_url('/'));
+    exit;
+}
+
 // ====================== PENDING REGISTRATION ======================
 add_action('wp_ajax_ve_save_pending_registrations', 've_handle_pending_registrations');
 add_action('wp_ajax_nopriv_ve_save_pending_registrations', 've_handle_pending_registrations');
@@ -311,6 +506,146 @@ function ve_handle_pending_registrations() {
     }
 
     ve_handle_pending_normal_registrations($event_id, $billing);
+}
+
+// ====================== COMPLIMENTARY TICKETS (admin only) ======================
+add_action('wp_ajax_ve_save_complimentary_registrations', 've_handle_complimentary_registrations');
+// No nopriv — administrators only.
+
+/**
+ * Issue complimentary tickets: no billing, gateway, or Zoho.
+ * Saves as paid @ N$0, generates QR, emails guests.
+ */
+function ve_handle_complimentary_registrations() {
+    if (!check_ajax_referer('ve_complimentary_nonce', 'nonce', false)) {
+        wp_send_json_error(['message' => 'Security check failed.']);
+    }
+
+    if (!ve_user_can_issue_complimentary()) {
+        wp_send_json_error(['message' => 'Only administrators can issue complimentary tickets.']);
+    }
+
+    $event_id = absint($_POST['event_id'] ?? 0);
+    if (!$event_id || get_post_type($event_id) !== 've_event') {
+        wp_send_json_error(['message' => 'Invalid event.']);
+    }
+
+    $tickets = $_POST['tickets'] ?? [];
+    if (!is_array($tickets) || empty($tickets)) {
+        wp_send_json_error(['message' => 'Add at least one guest.']);
+    }
+    $tickets = array_values($tickets);
+
+    if (count($tickets) > 30) {
+        wp_send_json_error(['message' => 'Maximum 30 complimentary tickets per batch.']);
+    }
+
+    $rows = [];
+    foreach ($tickets as $ticket) {
+        if (!is_array($ticket)) {
+            continue;
+        }
+        $first = sanitize_text_field(wp_unslash($ticket['first_name'] ?? ''));
+        $last  = sanitize_text_field(wp_unslash($ticket['last_name'] ?? ''));
+        $email = sanitize_email(wp_unslash($ticket['email'] ?? ''));
+        if ($first === '' || $last === '' || $email === '') {
+            wp_send_json_error(['message' => 'Each ticket needs first name, last name, and email.']);
+        }
+
+        $rows[] = [
+            'event_id'          => $event_id,
+            'first_name'        => $first,
+            'last_name'         => $last,
+            'organisation'      => sanitize_text_field(wp_unslash($ticket['organisation'] ?? '')),
+            'phone'             => sanitize_text_field(wp_unslash($ticket['phone'] ?? '')),
+            'email'             => $email,
+            'tier'              => VE_COMPLIMENTARY_TIER_KEY,
+            'tier_name'         => VE_COMPLIMENTARY_TIER_NAME,
+            'price'             => 0.0,
+            'line_type'         => 'person',
+            'included_free'     => 0,
+            'special_tier_key'  => '',
+            'status'            => 'paid',
+            'paid_at'           => current_time('mysql'),
+            'billing_company'   => '',
+            'billing_address'   => '',
+            'billing_country'   => 'NA',
+            'accounting_email'  => '',
+            'billing_notes'     => '',
+            'created_at'        => current_time('mysql'),
+        ];
+    }
+
+    if (empty($rows)) {
+        wp_send_json_error(['message' => 'Invalid data received.']);
+    }
+
+    ve_insert_complimentary_batch($rows);
+}
+
+/**
+ * Insert complimentary rows (already paid), generate QR + email, no gateway/Zoho.
+ *
+ * @param array<int,array<string,mixed>> $rows
+ */
+function ve_insert_complimentary_batch(array $rows) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 've_registrations';
+
+    $reference = ve_generate_complimentary_reference();
+    $inserted  = 0;
+    $ids       = [];
+
+    foreach ($rows as $row) {
+        $row['payment_reference']  = $reference;
+        $row['internal_reference'] = $reference;
+
+        $ok = $wpdb->insert($table_name, $row);
+        if ($ok) {
+            $inserted++;
+            $ids[] = (int) $wpdb->insert_id;
+        } else {
+            error_log('Venture Events: complimentary insert failed: ' . $wpdb->last_error . ' | data=' . wp_json_encode($row));
+        }
+    }
+
+    if ($inserted === 0) {
+        wp_send_json_error(['message' => 'Failed to save any complimentary tickets.']);
+    }
+
+    // QR + ticket email for each person row (no Zoho, no gateway)
+    $emailed = 0;
+    foreach ($ids as $reg_id) {
+        $reg = ve_get_registration($reg_id);
+        if (!$reg || ve_is_package_registration($reg)) {
+            continue;
+        }
+
+        if (!ve_ensure_registration_qr($reg)) {
+            error_log("Venture Events: Complimentary QR generation FAILED for registration #{$reg->id}");
+            continue;
+        }
+
+        if (ve_send_ticket_email($reg, (int) $reg->event_id, VE_COMPLIMENTARY_TIER_NAME)) {
+            $emailed++;
+        }
+    }
+
+    error_log(
+        "Venture Events: Complimentary batch {$reference}: {$inserted} ticket(s), {$emailed} email(s) by user "
+        . get_current_user_id()
+    );
+
+    wp_send_json_success([
+        'internal_reference' => $reference,
+        'count'              => $inserted,
+        'emailed'            => $emailed,
+        'message'            => sprintf(
+            '%d complimentary ticket(s) issued (ref %s). Ticket emails sent where possible.',
+            $inserted,
+            $reference
+        ),
+    ]);
 }
 
 /**
@@ -390,6 +725,16 @@ function ve_handle_pending_special_registrations($event_id, array $billing) {
     $package     = ve_get_special_tier($event_id, $special_key);
     if (!$package || $package['name'] === '' || $package['price'] <= 0) {
         wp_send_json_error(['message' => 'Please select a valid package.']);
+    }
+
+    // Stock gate: paid + pending package rows count against amount available
+    if (!ve_special_tier_has_stock($event_id, $special_key, $package)) {
+        wp_send_json_error([
+            'message' => sprintf(
+                'Sorry, “%s” is sold out. Please choose another package.',
+                $package['name']
+            ),
+        ]);
     }
 
     $normal_tiers = ve_get_event_tiers($event_id);
@@ -562,6 +907,69 @@ function ve_insert_pending_batch(array $rows) {
     ]);
 }
 
+// ====================== PENDING CLEANUP (24h TTL) ======================
+
+/**
+ * Schedule hourly cleanup of abandoned pending registrations.
+ * Safe to call repeatedly (only schedules if not already queued).
+ */
+function ve_schedule_pending_cleanup() {
+    if (!wp_next_scheduled('ve_cleanup_pending_registrations')) {
+        wp_schedule_event(time() + HOUR_IN_SECONDS, 'hourly', 've_cleanup_pending_registrations');
+        error_log('Venture Events: Scheduled pending registration cleanup (hourly)');
+    }
+}
+
+/**
+ * Unschedule pending cleanup (plugin deactivation).
+ */
+function ve_unschedule_pending_cleanup() {
+    wp_clear_scheduled_hook('ve_cleanup_pending_registrations');
+}
+
+/**
+ * Delete unpaid pending rows older than VE_PENDING_TTL_HOURS (default 24).
+ * Paid and complimentary tickets are never touched.
+ *
+ * @return int Number of rows deleted
+ */
+function ve_cleanup_expired_pending_registrations() {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+
+    $hours = (int) apply_filters('ve_pending_registration_ttl_hours', VE_PENDING_TTL_HOURS);
+    if ($hours < 1) {
+        $hours = 24;
+    }
+
+    // created_at is stored in blog-local time (current_time('mysql'))
+    $cutoff = date('Y-m-d H:i:s', current_time('timestamp') - ($hours * HOUR_IN_SECONDS));
+
+    // Only pending abandoned checkouts — never paid / complimentary
+    $deleted = $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$table} WHERE status = %s AND created_at < %s",
+            'pending',
+            $cutoff
+        )
+    );
+
+    if ($deleted === false) {
+        error_log('Venture Events: Pending cleanup query failed: ' . $wpdb->last_error);
+        return 0;
+    }
+
+    if ($deleted > 0) {
+        error_log(
+            "Venture Events: Deleted {$deleted} pending registration(s) older than {$hours}h (before {$cutoff})"
+        );
+    }
+
+    return (int) $deleted;
+}
+
+add_action('ve_cleanup_pending_registrations', 've_cleanup_expired_pending_registrations');
+
 // ====================== SUCCESS HANDLER ======================
 function ve_process_payment_success($data) {
     $payment_reference = sanitize_text_field($data['payment_reference'] ?? '');
@@ -626,31 +1034,16 @@ function ve_process_payment_success($data) {
             continue;
         }
 
-        // Generate QR code (pretty path; ve_is_read_qr_request() also handles rewrite-miss 404s)
-        $ticket_url = ve_get_ticket_url($reg);
-        $qr_url     = ve_generate_qr_code($ticket_url, $reg->id);
+        // Generate QR + keep on the in-memory row (do not rely only on a later SELECT)
+        $qr_url = ve_ensure_registration_qr($reg);
         if ($qr_url) {
-            $qr_updated = $wpdb->update(
-                $table_name,
-                ['qr_url' => $qr_url],
-                ['id' => (int) $reg->id],
-                ['%s'],
-                ['%d']
-            );
-            if ($qr_updated === false) {
-                error_log(
-                    "Venture Events: QR URL save FAILED for registration #{$reg->id}. "
-                    . "DB error: {$wpdb->last_error}"
-                );
-            } else {
-                error_log("Venture Events: QR generated for registration #{$reg->id}");
-            }
+            error_log("Venture Events: QR ready for registration #{$reg->id}");
         } else {
             error_log("Venture Events: QR generation FAILED for registration #{$reg->id}");
         }
     }
 
-    // Send ticket emails only for people (reload rows so qr_url / tier_name are present)
+    // Ticket emails only for people — QR must exist first (no "available shortly")
     $fresh_regs = ve_get_registrations_by_reference($payment_reference) ?: $registrations;
     foreach ($fresh_regs as $reg) {
         if (ve_is_package_registration($reg)) {
@@ -671,19 +1064,64 @@ function ve_process_payment_success($data) {
                 $reg->tier_name = $resolved;
             }
         }
+
+        // Final QR guarantee before mail (retry if first pass failed)
+        if (empty($reg->qr_url)) {
+            ve_ensure_registration_qr($reg);
+        }
+
+        if (empty($reg->qr_url)) {
+            error_log(
+                "Venture Events: CRITICAL — skipping ticket email for registration #{$reg->id} "
+                . "({$reg->email}): QR still missing after retries"
+            );
+            continue;
+        }
+
         ve_send_ticket_email($reg, $reg->event_id, ve_registration_tier_label($reg));
     }
-    error_log("Venture Events: Ticket emails sent for person rows on ref={$payment_reference}");
+    error_log("Venture Events: Ticket email pass finished for person rows on ref={$payment_reference}");
 
-    // Zoho invoice (best-effort, non-blocking) — all lines including packages & free @ 0
-    $master_reg = $registrations[0];
-    $master_reg->line_items = $registrations;
+    // Zoho: only after every row for this ref is confirmed paid in the DB (no draft on pending).
+    $paid_regs = ve_get_paid_registrations_by_reference($payment_reference);
+    $pending_left = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_name WHERE payment_reference = %s AND status = 'pending'",
+        $payment_reference
+    ));
 
-    $invoice = ve_generate_zoho_invoice($master_reg, $registrations[0]->event_id);
+    if ($pending_left > 0 || empty($paid_regs)) {
+        error_log(
+            "Venture Events: SKIPPING Zoho invoice for ref={$payment_reference} — "
+            . "payment not fully confirmed (paid_rows=" . count($paid_regs) . ", pending_left={$pending_left})"
+        );
+        return;
+    }
+
+    // Already invoiced (idempotent) — do not create a second Zoho invoice
+    $existing_invoice = '';
+    foreach ($paid_regs as $pr) {
+        $inv = trim((string) ($pr->invoice_number ?? ''));
+        if ($inv !== '') {
+            $existing_invoice = $inv;
+            break;
+        }
+    }
+    if ($existing_invoice !== '') {
+        error_log(
+            "Venture Events: SKIPPING Zoho invoice for ref={$payment_reference} — "
+            . "already linked to invoice #{$existing_invoice}"
+        );
+        return;
+    }
+
+    $master_reg = $paid_regs[0];
+    $master_reg->line_items = $paid_regs;
+
+    $invoice = ve_generate_zoho_invoice($master_reg, (int) $paid_regs[0]->event_id);
 
     if ($invoice && !empty($invoice['invoice_number'])) {
         $invoice_number = $invoice['invoice_number'];
-        foreach ($registrations as $reg) {
+        foreach ($paid_regs as $reg) {
             $wpdb->update($table_name, ['invoice_number' => $invoice_number], ['id' => $reg->id]);
         }
         error_log("Venture Events: Zoho invoice #{$invoice_number} linked to registrations for ref={$payment_reference}");
@@ -725,6 +1163,68 @@ function ve_get_registrations_by_reference($payment_reference) {
 }
 
 /**
+ * Registrations for a payment ref that are confirmed paid (status + paid_at).
+ *
+ * Used before Zoho invoice creation — never invent invoices for pending checkout.
+ *
+ * @param string $payment_reference
+ * @return array<int,object>
+ */
+function ve_get_paid_registrations_by_reference($payment_reference) {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+    $payment_reference = sanitize_text_field((string) $payment_reference);
+    if ($payment_reference === '') {
+        return [];
+    }
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table
+         WHERE payment_reference = %s
+           AND status = 'paid'
+           AND paid_at IS NOT NULL
+           AND paid_at != ''
+         ORDER BY id ASC",
+        $payment_reference
+    ));
+    return is_array($rows) ? $rows : [];
+}
+
+/**
+ * Whether every registration for a payment ref is paid with paid_at set.
+ * Pending rows remaining → false (do not create Zoho invoice).
+ *
+ * @param string $payment_reference
+ * @return bool
+ */
+function ve_payment_reference_fully_paid($payment_reference) {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+    $payment_reference = sanitize_text_field((string) $payment_reference);
+    if ($payment_reference === '') {
+        return false;
+    }
+
+    $total = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE payment_reference = %s",
+        $payment_reference
+    ));
+    if ($total < 1) {
+        return false;
+    }
+
+    $paid = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table
+         WHERE payment_reference = %s
+           AND status = 'paid'
+           AND paid_at IS NOT NULL
+           AND paid_at != ''",
+        $payment_reference
+    ));
+
+    return $paid === $total;
+}
+
+/**
  * From address used for ticket emails only (does not change other WP mail).
  *
  * Defaults to the site admin email (or ve_ticket_mail_from option if set).
@@ -752,21 +1252,204 @@ function ve_get_ticket_mail_from_name() {
     return $name !== '' ? $name : (get_bloginfo('name') . ' Tickets');
 }
 
+/**
+ * Generate QR for a person registration, persist qr_url, set on $reg.
+ *
+ * @param object $reg Registration row (mutated: qr_url when successful)
+ * @return string|false Public QR image URL or false
+ */
+function ve_ensure_registration_qr($reg) {
+    if (!$reg || empty($reg->id)) {
+        return false;
+    }
+    if (function_exists('ve_is_package_registration') && ve_is_package_registration($reg)) {
+        return false;
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 've_registrations';
+
+    $existing = trim((string) ($reg->qr_url ?? ''));
+    if ($existing !== '') {
+        return $existing;
+    }
+
+    // Prefer DB value if already saved (e.g. retry / complimentary path)
+    $from_db = $wpdb->get_var($wpdb->prepare(
+        "SELECT qr_url FROM $table_name WHERE id = %d",
+        (int) $reg->id
+    ));
+    if (is_string($from_db) && trim($from_db) !== '') {
+        $reg->qr_url = trim($from_db);
+        return $reg->qr_url;
+    }
+
+    if (!function_exists('ve_generate_qr_code')) {
+        error_log('Venture Events: ve_generate_qr_code missing — cannot build ticket QR');
+        return false;
+    }
+
+    $ticket_url = ve_get_ticket_url($reg);
+    $qr_url     = ve_generate_qr_code($ticket_url, (int) $reg->id);
+    if (!$qr_url) {
+        // One immediate retry (transient filesystem / race)
+        $qr_url = ve_generate_qr_code($ticket_url, (int) $reg->id);
+    }
+    if (!$qr_url) {
+        return false;
+    }
+
+    $qr_updated = $wpdb->update(
+        $table_name,
+        ['qr_url' => $qr_url],
+        ['id' => (int) $reg->id],
+        ['%s'],
+        ['%d']
+    );
+    if ($qr_updated === false) {
+        error_log(
+            "Venture Events: QR URL save FAILED for registration #{$reg->id}. "
+            . "DB error: {$wpdb->last_error}"
+        );
+        // Still use URL in this request if the file exists
+    }
+
+    $reg->qr_url = $qr_url;
+    return $qr_url;
+}
+
+/**
+ * Resolve filesystem path for a registration QR image (for email attach/embed).
+ *
+ * @param object $reg
+ * @return string|null Absolute path or null
+ */
+function ve_get_registration_qr_filepath($reg) {
+    $id = (int) ($reg->id ?? 0);
+    if ($id <= 0) {
+        return null;
+    }
+    $upload_dir = wp_upload_dir();
+    $path       = $upload_dir['basedir'] . '/venture-qrcodes/ticket-' . $id . '.png';
+    return file_exists($path) ? $path : null;
+}
+
+/**
+ * Permanently delete every registration row for an event (people + packages).
+ *
+ * Also removes matching QR PNG files under uploads/venture-qrcodes/.
+ * Does not touch Zoho invoices, gateway records, or event post meta (tiers).
+ *
+ * @param int $event_id ve_event post ID
+ * @return array{deleted:int,qr_files_removed:int,error:?string}
+ */
+function ve_clear_event_registrations($event_id) {
+    $event_id = absint($event_id);
+    $result   = [
+        'deleted'          => 0,
+        'qr_files_removed' => 0,
+        'error'            => null,
+    ];
+
+    if ($event_id < 1 || get_post_type($event_id) !== 've_event') {
+        $result['error'] = 'invalid_event';
+        return $result;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+
+    $ids = $wpdb->get_col($wpdb->prepare(
+        "SELECT id FROM $table WHERE event_id = %d",
+        $event_id
+    ));
+    if (!is_array($ids)) {
+        $ids = [];
+    }
+
+    $upload_dir = wp_upload_dir();
+    $qr_dir     = trailingslashit($upload_dir['basedir']) . 'venture-qrcodes/';
+    foreach ($ids as $id) {
+        $id   = (int) $id;
+        $path = $qr_dir . 'ticket-' . $id . '.png';
+        if (is_string($path) && file_exists($path) && is_file($path)) {
+            if (@unlink($path)) {
+                $result['qr_files_removed']++;
+            }
+        }
+    }
+
+    $deleted = $wpdb->query($wpdb->prepare(
+        "DELETE FROM $table WHERE event_id = %d",
+        $event_id
+    ));
+
+    if ($deleted === false) {
+        $result['error'] = 'db_error';
+        error_log(
+            "Venture Events: Failed to clear registrations for event_id={$event_id}: {$wpdb->last_error}"
+        );
+        return $result;
+    }
+
+    $result['deleted'] = (int) $deleted;
+    error_log(
+        "Venture Events: Cleared {$result['deleted']} registration(s) for event_id={$event_id} "
+        . "(qr_files_removed={$result['qr_files_removed']}) by user_id="
+        . (function_exists('get_current_user_id') ? (int) get_current_user_id() : 0)
+    );
+
+    return $result;
+}
+
+/**
+ * Count registration rows for an event (all line types and statuses).
+ *
+ * @param int $event_id
+ * @return int
+ */
+function ve_count_event_registrations($event_id) {
+    global $wpdb;
+    $event_id = absint($event_id);
+    if ($event_id < 1) {
+        return 0;
+    }
+    $table = $wpdb->prefix . 've_registrations';
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE event_id = %d",
+        $event_id
+    ));
+}
+
 function ve_send_ticket_email($reg, $event_id, $tier_name) {
+    // Never send a ticket without a QR image (Leon: "available shortly" is not acceptable)
+    if (empty($reg->qr_url)) {
+        ve_ensure_registration_qr($reg);
+    }
+    if (empty($reg->qr_url)) {
+        error_log(
+            'Venture Events: Refusing to send ticket email without QR for registration #'
+            . (int) ($reg->id ?? 0) . ' to ' . (string) ($reg->email ?? '')
+        );
+        return false;
+    }
+
     $event_title = get_the_title($event_id);
+    $subject     = 'Your Ticket for ' . $event_title;
 
-    $subject = 'Your Ticket for ' . $event_title;
-
-    $qr_img = $reg->qr_url
-        ? '<img src="' . esc_url($reg->qr_url) . '" alt="QR Code" style="max-width:300px; border:1px solid #ddd;">'
-        : '<p><em>QR code will be available shortly.</em></p>';
+    $qr_path = ve_get_registration_qr_filepath($reg);
+    // Prefer CID embed so clients show the QR without loading remote images
+    $qr_img  = $qr_path
+        ? '<img src="cid:ve_ticket_qr" alt="QR Code" style="max-width:300px; border:1px solid #ddd;">'
+        : '<img src="' . esc_url($reg->qr_url) . '" alt="QR Code" style="max-width:300px; border:1px solid #ddd;">';
 
     $price_note = 'N$ ' . number_format((float) $reg->price, 2);
     if (!empty($reg->included_free)) {
         $price_note .= ' — included with package';
     }
 
-    $message = '
+    $ticket_url = ve_get_ticket_url($reg);
+    $message    = '
     <h2>Your Ticket for ' . esc_html($event_title) . '</h2>
     <p><strong>Tier:</strong> ' . esc_html($tier_name) . ' (' . esc_html($price_note) . ')</p>
     <p><strong>Name:</strong> ' . esc_html($reg->first_name . ' ' . $reg->last_name) . '</p>
@@ -774,7 +1457,7 @@ function ve_send_ticket_email($reg, $event_id, $tier_name) {
     <p><strong>Internal Reference:</strong> ' . esc_html($reg->payment_reference) . '</p>
     ' . $qr_img . '
     <p>
-        <a href="' . esc_url(ve_get_ticket_url($reg)) . '" 
+        <a href="' . esc_url($ticket_url) . '" 
            style="background:#d1d741;color:#ffffff;padding:12px 24px;text-decoration:none;border-radius:0;border:1px solid #d1d741;font-family:Effra,Arial,sans-serif;">
             View Ticket Online
         </a>
@@ -800,8 +1483,24 @@ function ve_send_ticket_email($reg, $event_id, $tier_name) {
     add_filter('wp_mail_from', $from_filter, 999);
     add_filter('wp_mail_from_name', $name_filter, 999);
 
+    // Inline CID so Gmail/etc. show the QR without remote image load
+    $phpmailer_cb = null;
+    if ($qr_path) {
+        $phpmailer_cb = static function ($phpmailer) use ($qr_path) {
+            try {
+                $phpmailer->addEmbeddedImage($qr_path, 've_ticket_qr', 'ticket-qr.png', 'base64', 'image/png');
+            } catch (Exception $e) {
+                error_log('Venture Events: Failed to embed QR in ticket email: ' . $e->getMessage());
+            }
+        };
+        add_action('phpmailer_init', $phpmailer_cb, 20);
+    }
+
     $sent = wp_mail($reg->email, $subject, $message, $headers);
 
+    if ($phpmailer_cb) {
+        remove_action('phpmailer_init', $phpmailer_cb, 20);
+    }
     remove_filter('wp_mail_from', $from_filter, 999);
     remove_filter('wp_mail_from_name', $name_filter, 999);
 
@@ -840,8 +1539,331 @@ function ve_get_registration($id) {
     return $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
 }
 
-function ve_mark_as_entered($reg_id) {
+/**
+ * HMAC token embedded in ticket QR / email links.
+ *
+ * @param object|array $reg
+ * @return string
+ */
+function ve_ticket_token_for_reg($reg) {
+    $id    = (int) (is_array($reg) ? ($reg['id'] ?? 0) : ($reg->id ?? 0));
+    $email = (string) (is_array($reg) ? ($reg['email'] ?? '') : ($reg->email ?? ''));
+    return (string) wp_hash($id . '|' . $email);
+}
+
+/**
+ * @param object|null $reg
+ * @param string      $token
+ * @return bool
+ */
+function ve_verify_ticket_token($reg, $token) {
+    if (!$reg || $token === '' || $token === null) {
+        return false;
+    }
+    return hash_equals(ve_ticket_token_for_reg($reg), (string) $token);
+}
+
+/**
+ * Roles allowed to use the gate scanner (in addition to administrators).
+ * - event_gate: plugin-specific door role (optional dedicated accounts)
+ * - staff: Venture-Media child theme role
+ * - shop_manager: WooCommerce "Shop manager" (site label often "Shop keeper")
+ *
+ * @return string[]
+ */
+function ve_gate_scan_allowed_roles() {
+    return ['event_gate', 'staff', 'shop_manager'];
+}
+
+/**
+ * Whether the current user may run gate check-in.
+ *
+ * @return bool
+ */
+function ve_user_can_gate_scan() {
+    if (!is_user_logged_in()) {
+        return false;
+    }
+    if (current_user_can('manage_options')) {
+        return true;
+    }
+    $roles = (array) (wp_get_current_user()->roles ?? []);
+    foreach (ve_gate_scan_allowed_roles() as $role) {
+        if (in_array($role, $roles, true)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Display name for the user who first checked a guest in.
+ *
+ * @param int $user_id
+ * @return string
+ */
+function ve_gate_user_display_name($user_id) {
+    $user_id = (int) $user_id;
+    if ($user_id <= 0) {
+        return '';
+    }
+    $user = get_userdata($user_id);
+    if (!$user) {
+        return '';
+    }
+    $name = trim((string) $user->display_name);
+    return $name !== '' ? $name : (string) $user->user_login;
+}
+
+/**
+ * Format check-in time for gate UI (e.g. "10:04 am").
+ *
+ * @param string $mysql_datetime
+ * @return string
+ */
+function ve_format_gate_time($mysql_datetime) {
+    if (empty($mysql_datetime)) {
+        return '';
+    }
+    return date_i18n('g:i a', strtotime($mysql_datetime));
+}
+
+/**
+ * Extract registration id + token from a scanned QR payload (full URL or query string).
+ *
+ * @param string $raw
+ * @return array{id:int,token:string}
+ */
+function ve_parse_scanned_ticket_payload($raw) {
+    $raw = trim((string) $raw);
+    $id  = 0;
+    $token = '';
+
+    if ($raw === '') {
+        return ['id' => 0, 'token' => ''];
+    }
+
+    // Full URL or path with query
+    $query = '';
+    if (strpos($raw, '?') !== false) {
+        $parts = wp_parse_url($raw);
+        if (is_array($parts) && !empty($parts['query'])) {
+            $query = $parts['query'];
+        } else {
+            // Fallback: everything after first ?
+            $query = substr($raw, strpos($raw, '?') + 1);
+        }
+    } elseif (strpos($raw, 'id=') !== false) {
+        $query = $raw;
+    }
+
+    if ($query !== '') {
+        parse_str($query, $args);
+        $id    = absint($args['id'] ?? 0);
+        $token = isset($args['token']) ? sanitize_text_field(wp_unslash((string) $args['token'])) : '';
+    }
+
+    return ['id' => $id, 'token' => $token];
+}
+
+/**
+ * Mark registration as entered (first time only at DB level if already set — callers should check).
+ *
+ * @param int      $reg_id
+ * @param int|null $user_id  WP user who scanned; defaults to current user when logged in
+ * @return bool
+ */
+function ve_mark_as_entered($reg_id, $user_id = null) {
     global $wpdb;
-    $table = $wpdb->prefix . 've_registrations';
-    $wpdb->update($table, ['entered_at' => current_time('mysql')], ['id' => $reg_id]);
+    $table  = $wpdb->prefix . 've_registrations';
+    $reg_id = absint($reg_id);
+    if (!$reg_id) {
+        return false;
+    }
+
+    if ($user_id === null && is_user_logged_in()) {
+        $user_id = get_current_user_id();
+    }
+    $user_id = absint($user_id);
+
+    $data = [
+        'entered_at' => current_time('mysql'),
+    ];
+    // Only set entered_by when we have a user; never overwrite an existing entered_by via this helper
+    // when already entered (callers pass only on first entry).
+    if ($user_id > 0) {
+        $data['entered_by'] = $user_id;
+    }
+
+    $updated = $wpdb->update($table, $data, ['id' => $reg_id]);
+    return $updated !== false;
+}
+
+/**
+ * Gate check-in for one ticket, scoped to a shortcode event.
+ *
+ * @param int    $event_id Shortcode event id
+ * @param int    $reg_id
+ * @param string $token
+ * @return array{ok:bool,code:string,headline:string,tier_name?:string,guest_name?:string,entry_line?:string,message?:string,status?:string}
+ */
+function ve_gate_process_check_in($event_id, $reg_id, $token) {
+    $event_id = absint($event_id);
+    $reg_id   = absint($reg_id);
+    $token    = (string) $token;
+
+    if (!$event_id || get_post_type($event_id) !== 've_event') {
+        return [
+            'ok'       => false,
+            'code'     => 'bad_event',
+            'headline' => 'Invalid ticket',
+            'message'  => 'Scanner is not configured for a valid event.',
+        ];
+    }
+
+    if (!$reg_id || $token === '') {
+        return [
+            'ok'       => false,
+            'code'     => 'bad_payload',
+            'headline' => 'Invalid ticket',
+            'message'  => 'Could not read ticket code.',
+        ];
+    }
+
+    $reg = ve_get_registration($reg_id);
+    if (!$reg || !ve_verify_ticket_token($reg, $token)) {
+        return [
+            'ok'       => false,
+            'code'     => 'invalid',
+            'headline' => 'Invalid ticket',
+            'message'  => 'This ticket is not valid.',
+        ];
+    }
+
+    if (ve_is_package_registration($reg)) {
+        return [
+            'ok'       => false,
+            'code'     => 'package',
+            'headline' => 'Invalid ticket',
+            'message'  => 'This code is a package purchase, not a personal ticket.',
+        ];
+    }
+
+    if ((int) $reg->event_id !== $event_id) {
+        return [
+            'ok'       => false,
+            'code'     => 'wrong_event',
+            'headline' => 'Invalid ticket',
+            'message'  => 'This ticket is for a different event.',
+        ];
+    }
+
+    $status = (string) ($reg->status ?? '');
+    if ($status !== 'paid') {
+        return [
+            'ok'       => false,
+            'code'     => 'not_paid',
+            'headline' => 'Invalid ticket',
+            'message'  => 'This ticket has not been paid.',
+        ];
+    }
+
+    $tier_name  = ve_registration_tier_label($reg);
+    $guest_name = trim((string) ($reg->first_name ?? '') . ' ' . (string) ($reg->last_name ?? ''));
+    if ($guest_name === '') {
+        $guest_name = '—';
+    }
+
+    // Already entered — do not overwrite entered_at / entered_by
+    if (!empty($reg->entered_at)) {
+        $by_name = ve_gate_user_display_name((int) ($reg->entered_by ?? 0));
+        $time    = ve_format_gate_time($reg->entered_at);
+        if ($by_name !== '') {
+            $entry_line = 'Entered by ' . $by_name . ' - ' . $time;
+        } else {
+            $entry_line = 'Entered - ' . $time;
+        }
+
+        return [
+            'ok'         => true,
+            'code'       => 'already',
+            'status'     => 'already',
+            'headline'   => 'Valid ticket',
+            'tier_name'  => $tier_name,
+            'guest_name' => $guest_name,
+            'entry_line' => $entry_line,
+        ];
+    }
+
+    // First entry
+    ve_mark_as_entered($reg_id, get_current_user_id());
+    $reg = ve_get_registration($reg_id);
+    $by_name = ve_gate_user_display_name((int) ($reg->entered_by ?? get_current_user_id()));
+    $time    = ve_format_gate_time($reg->entered_at ?? current_time('mysql'));
+
+    return [
+        'ok'              => true,
+        'code'            => 'first',
+        'status'          => 'first',
+        'headline'        => 'Valid ticket',
+        'tier_name'       => $tier_name,
+        'guest_name'      => $guest_name,
+        'entry_line'      => 'Entering - ' . $time,
+        'entered_by_name' => $by_name,
+    ];
+}
+
+// ====================== GATE SCAN AJAX ======================
+add_action('wp_ajax_ve_gate_check_in', 've_ajax_gate_check_in');
+
+/**
+ * AJAX: Gate staff check-in (logged-in only; no nopriv).
+ */
+function ve_ajax_gate_check_in() {
+    if (!check_ajax_referer('ve_gate_scan_nonce', 'nonce', false)) {
+        wp_send_json_error([
+            'headline' => 'Invalid ticket',
+            'message'  => 'Security check failed. Reload the page and try again.',
+            'code'     => 'nonce',
+        ], 403);
+    }
+
+    if (!ve_user_can_gate_scan()) {
+        wp_send_json_error([
+            'headline' => 'Access denied',
+            'message'  => 'You must be logged in with a Staff, Shop manager, or Gate account to scan tickets.',
+            'code'     => 'forbidden',
+        ], 403);
+    }
+
+    $event_id = absint($_POST['event_id'] ?? 0);
+    $reg_id   = absint($_POST['id'] ?? 0);
+    $token    = isset($_POST['token']) ? sanitize_text_field(wp_unslash((string) $_POST['token'])) : '';
+    $raw      = isset($_POST['raw']) ? wp_unslash((string) $_POST['raw']) : '';
+
+    if ((!$reg_id || $token === '') && $raw !== '') {
+        $parsed = ve_parse_scanned_ticket_payload($raw);
+        $reg_id = $parsed['id'];
+        $token  = $parsed['token'];
+    }
+
+    $result = ve_gate_process_check_in($event_id, $reg_id, $token);
+
+    if (empty($result['ok'])) {
+        wp_send_json_error([
+            'headline' => $result['headline'] ?? 'Invalid ticket',
+            'message'  => $result['message'] ?? '',
+            'code'     => $result['code'] ?? 'error',
+        ]);
+    }
+
+    wp_send_json_success([
+        'status'          => $result['status'] ?? 'first',
+        'code'            => $result['code'] ?? 'first',
+        'headline'        => $result['headline'] ?? 'Valid ticket',
+        'tier_name'       => $result['tier_name'] ?? '',
+        'guest_name'      => $result['guest_name'] ?? '',
+        'entry_line'      => $result['entry_line'] ?? '',
+        'entered_by_name' => $result['entered_by_name'] ?? '',
+    ]);
 }

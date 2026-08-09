@@ -110,6 +110,12 @@
             || ($('#ve-registration-form').data('mode') === 'special');
     }
 
+    function isComplimentaryMode() {
+        return (window.veRegistrationMode === 'complimentary')
+            || ($('#ve-form-mode').val() === 'complimentary')
+            || ($('#ve-registration-form').data('mode') === 'complimentary');
+    }
+
     function personFieldsHTML() {
         return `
             <p><label>First Name <span class="ve-required">*</span></label><br>
@@ -122,6 +128,24 @@
                <input type="text" class="phone"></p>
             <p><label>Email (for ticket) <span class="ve-required">*</span></label><br>
                <input type="email" class="email" required></p>`;
+    }
+
+    function createComplimentaryTicketHTML(index) {
+        const removeBtn = index > 0
+            ? `<button type="button" class="remove-ticket-btn" aria-label="Remove ticket">×</button>`
+            : '';
+
+        return `
+        <div class="ticket-accordion" data-index="${index}" data-kind="complimentary">
+            <div class="accordion-header">
+                <strong>Ticket ${index + 1}</strong>
+                ${removeBtn}
+            </div>
+            <div class="accordion-body">
+                <p class="ve-included-tier"><strong>Complimentary Pass</strong> <span class="ve-hint">(N$ 0.00)</span></p>
+                ${personFieldsHTML()}
+            </div>
+        </div>`;
     }
 
     function createTicketHTML(index, tierOptions) {
@@ -215,10 +239,11 @@
 
     function validateCheckoutButton() {
         let isValid = true;
+        const complimentary = isComplimentaryMode();
 
         if (isSpecialMode()) {
-            const packageKey = $('#ve-special-tier-select').val();
-            if (!packageKey) {
+            const pkg = getSelectedPackage();
+            if (!pkg) {
                 isValid = false;
             } else {
                 $('#free-tickets-container .ticket-accordion').each(function () {
@@ -237,6 +262,18 @@
                     });
                 }
             }
+        } else if (complimentary) {
+            const $guests = $('#tickets-container .ticket-accordion');
+            if (!$guests.length) {
+                isValid = false;
+            } else {
+                $guests.each(function () {
+                    if (!validatePersonBlock($(this), false)) {
+                        isValid = false;
+                        return false;
+                    }
+                });
+            }
         } else {
             const $paid = $('#tickets-container .ticket-accordion');
             if (!$paid.length) {
@@ -251,7 +288,8 @@
             }
         }
 
-        if (isValid) {
+        // Complimentary: no billing section
+        if (isValid && !complimentary) {
             const billingAddress  = ($('#billing_address').val() || '').trim();
             const accountingEmail = ($('#accounting_email').val() || '').trim();
             const billingCountry  = $('#billing_country').val();
@@ -274,7 +312,9 @@
 
         const $btn = $('#ve-checkout-btn');
         const $wrap = $btn.closest('.ve-checkout-wrap');
-        const disabledTip = 'Complete the form before proceeding';
+        const disabledTip = complimentary
+            ? 'Complete guest details first'
+            : 'Complete the form before proceeding';
 
         if (!$btn.length) {
             return;
@@ -314,7 +354,7 @@
             const $header = $ticket.find('.accordion-header');
             $header.find('.remove-ticket-btn').remove();
 
-            // Normal: cannot remove the only remaining ticket
+            // Normal / complimentary: cannot remove the only remaining ticket
             // Special: all extra tickets are removable
             const allowRemove = isSpecialMode()
                 ? true
@@ -332,6 +372,16 @@
     function addTicket(tierOptions, options) {
         options = options || {};
         if (ticketCount >= MAX_TICKETS) return;
+
+        if (isComplimentaryMode()) {
+            ticketCount++;
+            $('#tickets-container').append(createComplimentaryTicketHTML(ticketCount - 1));
+            renumberTickets();
+            updatePriceAndBreakdown();
+            validateCheckoutButton();
+            setAddTicketButtonState();
+            return;
+        }
 
         const asExtra = !!options.asExtra || isSpecialMode();
         const allowRemove = asExtra
@@ -360,7 +410,7 @@
             return;
         }
 
-        // Normal form: never remove the last remaining ticket
+        // Normal / complimentary: never remove the last remaining ticket
         if (!isSpecialMode() && $('#tickets-container .ticket-accordion').length <= 1) {
             return;
         }
@@ -378,7 +428,46 @@
         if (!key || !window.veSpecialTiers || !window.veSpecialTiers[key]) {
             return null;
         }
-        return Object.assign({ key: key }, window.veSpecialTiers[key]);
+        const pkg = Object.assign({ key: key }, window.veSpecialTiers[key]);
+        // Sold-out options are disabled, but still guard here
+        if (pkg.sold_out) {
+            return null;
+        }
+        if (pkg.remaining !== null && pkg.remaining !== undefined && pkg.remaining !== ''
+            && parseInt(pkg.remaining, 10) < 1) {
+            return null;
+        }
+        return pkg;
+    }
+
+    function updatePackageStockHint(pkg) {
+        const $hint = $('#ve-package-stock-hint');
+        if (!$hint.length) {
+            return;
+        }
+        if (!pkg) {
+            $hint.prop('hidden', true).text('');
+            return;
+        }
+        const cap = parseInt(pkg.available, 10) || 0;
+        if (cap < 1) {
+            $hint.prop('hidden', true).text('');
+            return;
+        }
+        const left = (pkg.remaining === null || pkg.remaining === undefined || pkg.remaining === '')
+            ? null
+            : parseInt(pkg.remaining, 10);
+        if (left === null) {
+            $hint.prop('hidden', true).text('');
+            return;
+        }
+        if (left < 1) {
+            $hint.prop('hidden', false).text('This package is sold out.');
+            return;
+        }
+        $hint.prop('hidden', false).text(
+            left === 1 ? '1 of this package remaining.' : (left + ' of this package remaining.')
+        );
     }
 
     function renderFreeTickets(pkg) {
@@ -411,6 +500,12 @@
     }
 
     function updatePriceAndBreakdown() {
+        if (isComplimentaryMode()) {
+            $('#price-amount').text('0.00');
+            $('#vat-breakdown').empty();
+            return;
+        }
+
         let total = 0;
 
         if (isSpecialMode()) {
@@ -447,6 +542,65 @@
             }
         }
         $('#vat-breakdown').html(html);
+    }
+
+    function showCompResult(message, isError) {
+        const $box = $('#ve-comp-result');
+        if (!$box.length) {
+            return;
+        }
+        $box
+            .prop('hidden', false)
+            .toggleClass('ve-comp-result--error', !!isError)
+            .toggleClass('ve-comp-result--ok', !isError)
+            .text(message);
+    }
+
+    function clearCompResult() {
+        const $box = $('#ve-comp-result');
+        if (!$box.length) {
+            return;
+        }
+        $box.prop('hidden', true).removeClass('ve-comp-result--error ve-comp-result--ok').empty();
+    }
+
+    function resetComplimentaryForm() {
+        $('#tickets-container').empty();
+        ticketCount = 0;
+        addTicket('', { asExtra: false });
+        validateCheckoutButton();
+        updatePriceAndBreakdown();
+        setAddTicketButtonState();
+    }
+
+    function postComplimentary(formData, $btn) {
+        const ajaxUrl = (window.veComplimentary && veComplimentary.ajax_url)
+            ? veComplimentary.ajax_url
+            : ((window.veGateway && veGateway.ajax_url) ? veGateway.ajax_url : '/wp-admin/admin-ajax.php');
+
+        const defaultLabel = 'Issue complimentary tickets';
+
+        $.post(ajaxUrl, formData)
+            .done(function (response) {
+                if (response.success) {
+                    const msg = (response.data && response.data.message)
+                        ? response.data.message
+                        : 'Complimentary tickets issued.';
+                    showCompResult(msg, false);
+                    $btn.prop('disabled', false).text(defaultLabel);
+                    resetComplimentaryForm();
+                } else {
+                    const err = (response.data && response.data.message) || 'Unknown error';
+                    showCompResult(err, true);
+                    $btn.prop('disabled', false).text(defaultLabel);
+                    validateCheckoutButton();
+                }
+            })
+            .fail(function () {
+                showCompResult('Network error – please try again.', true);
+                $btn.prop('disabled', false).text(defaultLabel);
+                validateCheckoutButton();
+            });
     }
 
     function populateCountries() {
@@ -502,7 +656,11 @@
         if (!$form.length) return;
 
         const special = isSpecialMode();
-        console.log('✅ Venture Events registration form initialized', special ? '(special)' : '(normal)');
+        const complimentary = isComplimentaryMode();
+        console.log(
+            '✅ Venture Events registration form initialized',
+            complimentary ? '(complimentary)' : (special ? '(special)' : '(normal)')
+        );
 
         const tierOptions = window.veTierOptions || '';
 
@@ -514,12 +672,14 @@
                 const pkg = getSelectedPackage();
                 if (!pkg) {
                     showSpecialBody(false);
+                    updatePackageStockHint(null);
                     updatePriceAndBreakdown();
                     validateCheckoutButton();
                     return;
                 }
 
                 showSpecialBody(true);
+                updatePackageStockHint(pkg);
                 renderFreeTickets(pkg);
                 // Do not auto-add extra paid tickets; package + free is enough
                 $('#tickets-container').empty();
@@ -529,7 +689,7 @@
                 validateCheckoutButton();
             });
         } else {
-            // Start with first paid ticket
+            // Start with first paid / complimentary ticket
             addTicket(tierOptions, { asExtra: false });
         }
 
@@ -556,11 +716,31 @@
             }
         );
 
-        populateCountries();
+        if (!complimentary) {
+            populateCountries();
+        }
 
         $('#ve-checkout-btn').on('click', function () {
             const $btn = $(this);
             if ($btn.prop('disabled')) {
+                return;
+            }
+
+            if (complimentary) {
+                clearCompResult();
+                $btn.prop('disabled', true).text('Issuing tickets...');
+
+                const tickets = [];
+                $('#tickets-container .ticket-accordion').each(function () {
+                    tickets.push(collectPersonFromAccordion($(this)));
+                });
+
+                postComplimentary({
+                    action: 've_save_complimentary_registrations',
+                    nonce: (window.veComplimentary && veComplimentary.nonce) || '',
+                    event_id: $('#ve-event-id').val(),
+                    tickets: tickets
+                }, $btn);
                 return;
             }
 
@@ -580,7 +760,14 @@
             if (special) {
                 const pkg = getSelectedPackage();
                 if (!pkg) {
-                    alert('Please select a package.');
+                    alert('Please select a package that is still available.');
+                    $btn.prop('disabled', false).text('Proceed to Payment');
+                    validateCheckoutButton();
+                    return;
+                }
+                if (pkg.sold_out || (pkg.remaining !== null && pkg.remaining !== undefined
+                    && pkg.remaining !== '' && parseInt(pkg.remaining, 10) < 1)) {
+                    alert('Sorry, that package is sold out. Please choose another.');
                     $btn.prop('disabled', false).text('Proceed to Payment');
                     validateCheckoutButton();
                     return;

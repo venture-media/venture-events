@@ -12,6 +12,44 @@ if (!class_exists('WP_List_Table')) {
 }
 require_once __DIR__ . '/class-ve-guest-list-table.php';
 
+// ====================== HEALTH CHECKS ======================
+
+/**
+ * Ticket emails require QR images; QR generation needs phpqrcode (see Third-party libraries.md).
+ * Without it, payment success marks paid but skips every ticket email (D19).
+ */
+add_action('admin_notices', 've_admin_notice_missing_phpqrcode');
+function ve_admin_notice_missing_phpqrcode() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    // Only on our screens + plugins list (where deploys go wrong)
+    $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+    $show   = false;
+    if ($screen) {
+        $id = (string) $screen->id;
+        if (
+            strpos($id, 've_event') !== false
+            || strpos($id, 'venture-events') !== false
+            || $id === 'plugins'
+        ) {
+            $show = true;
+        }
+    }
+    if (!$show) {
+        return;
+    }
+
+    $qrlib = (defined('VE_PATH') ? VE_PATH : '') . 'includes/phpqrcode/qrlib.php';
+    if ($qrlib !== '' && file_exists($qrlib)) {
+        return;
+    }
+
+    echo '<div class="notice notice-error"><p><strong>Venture Events:</strong> '
+        . esc_html__('The phpqrcode library is missing (includes/phpqrcode/qrlib.php). QR codes cannot be generated, so ticket emails will not send. Restore the library from the plugin package or original includes/phpqrcode folder.', 'venture-events')
+        . '</p></div>';
+}
+
 // ====================== EVENTS LIST TABLE ======================
 
 /** Drop the frontend "View" row action — events are embedded via shortcode. */
@@ -62,6 +100,18 @@ function ve_event_list_column_content($column, $post_id) {
             esc_html($special)
         );
     }
+
+    $gate = sprintf('[venture_gate_scan event_id="%d"]', $id);
+    printf(
+        '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">gate</span></div>',
+        esc_html($gate)
+    );
+
+    $comp = sprintf('[venture_complimentary event_id="%d"]', $id);
+    printf(
+        '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">comp</span></div>',
+        esc_html($comp)
+    );
 }
 
 // ====================== TIERS META BOX ======================
@@ -200,6 +250,8 @@ function ve_special_tiers_meta_box_html($post) {
         (tier chosen here — buyers cannot change it). Use shortcode
         <code>[venture_registration event_id="S<?php echo (int) $post->ID; ?>"]</code> on a separate page.
         Save normal <strong>Event Ticket Tiers</strong> first if you need to pick an included free ticket tier.
+        <strong>Amount available</strong> limits how many of that package can be sold (paid + pending orders count).
+        Use <code>0</code> for unlimited.
     </p>
 
     <div id="ve-special-tiers-wrapper">
@@ -209,6 +261,11 @@ function ve_special_tiers_meta_box_html($post) {
             $price         = esc_attr($tier['price'] ?? '');
             $free_tickets  = (int) ($tier['free_tickets'] ?? 0);
             $free_tier_key = (string) ($tier['free_tier_key'] ?? '');
+            $available     = max(0, (int) ($tier['available'] ?? 0));
+            $sold          = function_exists('ve_count_special_tier_sold')
+                ? ve_count_special_tier_sold((int) $post->ID, (string) $key)
+                : 0;
+            $remaining     = ($available > 0) ? max(0, $available - $sold) : null;
             ?>
             <div class="ve-special-tier-row" style="border:1px solid #ddd; padding:12px; margin-bottom:10px; background:#fafafa;">
                 <p style="margin:0 0 8px;">
@@ -222,6 +279,11 @@ function ve_special_tiers_meta_box_html($post) {
                     <label>Price (N$)<br>
                         <input type="number" name="ve_special_tiers[<?php echo esc_attr($key); ?>][price]"
                                value="<?php echo $price; ?>" step="0.01" min="0.01" style="width:120px;">
+                    </label>
+                    <label>Amount available<br>
+                        <input type="number" name="ve_special_tiers[<?php echo esc_attr($key); ?>][available]"
+                               value="<?php echo esc_attr($available); ?>" step="1" min="0" style="width:100px;"
+                               title="0 = unlimited">
                     </label>
                     <label>Free tickets included<br>
                         <input type="number" name="ve_special_tiers[<?php echo esc_attr($key); ?>][free_tickets]"
@@ -239,7 +301,21 @@ function ve_special_tiers_meta_box_html($post) {
                     </label>
                     <button type="button" class="button ve-remove-special-tier">Remove</button>
                 </p>
-                <p class="description" style="margin:0;">If free tickets is 0, the free ticket tier is not used.</p>
+                <p class="description" style="margin:0;">
+                    If free tickets is 0, the free ticket tier is not used.
+                    <?php if ($available > 0): ?>
+                        · Sold / held: <strong><?php echo (int) $sold; ?></strong>
+                        · Remaining: <strong><?php echo (int) $remaining; ?></strong>
+                        <?php if ($remaining === 0): ?>
+                            <span style="color:#b32d2e;">(sold out)</span>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        · Stock: <strong>unlimited</strong>
+                        <?php if ($sold > 0): ?>
+                            (<?php echo (int) $sold; ?> sold / held so far)
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </p>
             </div>
         <?php endforeach; ?>
     </div>
@@ -258,6 +334,9 @@ function ve_special_tiers_meta_box_html($post) {
                 <label>Price (N$)<br>
                     <input type="number" name="ve_special_tiers[__KEY__][price]" value="" step="0.01" min="0.01" style="width:120px;" placeholder="0.00">
                 </label>
+                <label>Amount available<br>
+                    <input type="number" name="ve_special_tiers[__KEY__][available]" value="0" step="1" min="0" style="width:100px;" title="0 = unlimited">
+                </label>
                 <label>Free tickets included<br>
                     <input type="number" name="ve_special_tiers[__KEY__][free_tickets]" value="0" step="1" min="0" style="width:100px;">
                 </label>
@@ -273,7 +352,7 @@ function ve_special_tiers_meta_box_html($post) {
                 </label>
                 <button type="button" class="button ve-remove-special-tier">Remove</button>
             </p>
-            <p class="description" style="margin:0;">If free tickets is 0, the free ticket tier is not used.</p>
+            <p class="description" style="margin:0;">If free tickets is 0, the free ticket tier is not used. Amount available: 0 = unlimited.</p>
         </div>
     </script>
 
@@ -327,6 +406,7 @@ function ve_save_special_tiers_meta($post_id) {
             $price        = floatval($tier['price'] ?? 0);
             $free_tickets = max(0, intval($tier['free_tickets'] ?? 0));
             $free_tier    = sanitize_text_field($tier['free_tier_key'] ?? '');
+            $available    = max(0, intval($tier['available'] ?? 0));
 
             if ($name === '' || $price <= 0) {
                 continue;
@@ -362,6 +442,7 @@ function ve_save_special_tiers_meta($post_id) {
             $special[$key] = [
                 'name'          => $name,
                 'price'         => $price,
+                'available'     => $available,
                 'free_tickets'  => $free_tickets,
                 'free_tier_key' => $free_tier,
             ];
@@ -369,6 +450,264 @@ function ve_save_special_tiers_meta($post_id) {
     }
 
     update_post_meta($post_id, '_ve_special_tiers', $special);
+}
+
+// ====================== DANGER: CLEAR ALL TICKETS META BOX ======================
+
+add_action('add_meta_boxes', 've_add_clear_tickets_meta_box');
+function ve_add_clear_tickets_meta_box() {
+    add_meta_box(
+        've_clear_tickets_meta',
+        'Danger zone: Clear all tickets',
+        've_clear_tickets_meta_box_html',
+        've_event',
+        'side',
+        'low'
+    );
+}
+
+/**
+ * Meta box UI — type exact event title (GitHub-style) then submit via admin-post
+ * (separate form so it is not nested inside the post editor form).
+ */
+function ve_clear_tickets_meta_box_html($post) {
+    if (!current_user_can('manage_options')) {
+        echo '<p>' . esc_html__('You do not have permission to clear tickets.', 'venture-events') . '</p>';
+        return;
+    }
+
+    $event_id = (int) $post->ID;
+    if ($event_id < 1) {
+        echo '<p class="description">' . esc_html__('Save the event first before clearing tickets.', 'venture-events') . '</p>';
+        return;
+    }
+
+    $title = (string) $post->post_title;
+    $count = function_exists('ve_count_event_registrations')
+        ? ve_count_event_registrations($event_id)
+        : 0;
+
+    $action_url = admin_url('admin-post.php');
+    $nonce      = wp_create_nonce('ve_clear_event_tickets_' . $event_id);
+    ?>
+    <div class="ve-danger-zone" style="border:1px solid #b32d2e;border-radius:2px;padding:10px;background:#fcf0f1;">
+        <p style="margin:0 0 8px;color:#1d2327;">
+            <strong>Permanently delete</strong> all registration rows for this event
+            (paid, pending, complimentary, free included people, and special packages).
+            Guest list and special list will empty. QR images for those tickets are removed.
+        </p>
+        <p style="margin:0 0 8px;color:#646970;font-size:12px;">
+            Does <strong>not</strong> delete Zoho invoices, payment gateway records, or this event’s tier settings.
+            This cannot be undone.
+        </p>
+        <p style="margin:0 0 10px;">
+            <strong>Registrations on this event:</strong>
+            <span id="ve-clear-tickets-count"><?php echo (int) $count; ?></span>
+        </p>
+
+        <?php if ($title === ''): ?>
+            <p class="description" style="margin:0;color:#b32d2e;">
+                Set and save an event title first. You must type the exact title to confirm.
+            </p>
+        <?php elseif ($count < 1): ?>
+            <p class="description" style="margin:0;">There are no tickets to clear.</p>
+        <?php else: ?>
+            <div id="ve-clear-tickets-ui"
+                 data-action-url="<?php echo esc_url($action_url); ?>"
+                 data-event-id="<?php echo (int) $event_id; ?>"
+                 data-nonce="<?php echo esc_attr($nonce); ?>"
+                 data-required-title="<?php echo esc_attr($title); ?>">
+                <p style="margin:0 0 6px;font-size:12px;">
+                    Type <strong style="user-select:all;"><?php echo esc_html($title); ?></strong> to confirm.
+                </p>
+                <p style="margin:0 0 8px;">
+                    <label for="ve-clear-tickets-confirm" class="screen-reader-text">Confirm event name</label>
+                    <input type="text" id="ve-clear-tickets-confirm" class="widefat"
+                           autocomplete="off" spellcheck="false" autocorrect="off"
+                           autocapitalize="off" placeholder="Type the event name">
+                </p>
+                <p style="margin:0;">
+                    <button type="button" id="ve-clear-tickets-btn" class="button button-secondary"
+                            style="color:#b32d2e;border-color:#b32d2e;" disabled>
+                        Clear all tickets
+                    </button>
+                </p>
+            </div>
+            <?php
+            // Inline script must not depend on a nested <form> (invalid inside #post and
+            // browsers drop it, which previously aborted the whole enable/submit logic).
+            ?>
+            <script>
+            (function () {
+                var root = document.getElementById('ve-clear-tickets-ui');
+                if (!root) return;
+                var input = document.getElementById('ve-clear-tickets-confirm');
+                var btn = document.getElementById('ve-clear-tickets-btn');
+                if (!input || !btn) return;
+
+                // Prefer dataset (auto-decodes HTML entities in attributes)
+                var required = (root.dataset && root.dataset.requiredTitle != null)
+                    ? String(root.dataset.requiredTitle)
+                    : (root.getAttribute('data-required-title') || '');
+                var actionUrl = (root.dataset && root.dataset.actionUrl) || root.getAttribute('data-action-url') || '';
+                var eventId = (root.dataset && root.dataset.eventId) || root.getAttribute('data-event-id') || '';
+                var nonce = (root.dataset && root.dataset.nonce) || root.getAttribute('data-nonce') || '';
+
+                function titlesMatch(a, b) {
+                    // Exact match first (GitHub-style); also allow trim if title has no edge spaces
+                    if (a === b) return true;
+                    if (a.trim() === b.trim() && a.trim() !== '') return true;
+                    return false;
+                }
+
+                function sync() {
+                    var ok = required !== '' && titlesMatch(input.value, required);
+                    btn.disabled = !ok;
+                    if (ok) {
+                        btn.removeAttribute('aria-disabled');
+                        btn.classList.remove('disabled');
+                    }
+                }
+
+                input.addEventListener('input', sync);
+                input.addEventListener('keyup', sync);
+                input.addEventListener('change', sync);
+                input.addEventListener('paste', function () { setTimeout(sync, 0); });
+                sync();
+
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!titlesMatch(input.value, required) || !actionUrl) return;
+
+                    var n = document.getElementById('ve-clear-tickets-count');
+                    var msg = 'Permanently delete all ' +
+                        (n ? n.textContent : '') +
+                        ' ticket/registration row(s) for this event?\n\nThis cannot be undone.';
+                    if (!window.confirm(msg)) return;
+
+                    // Build form on body — never nest inside the post editor form
+                    var form = document.createElement('form');
+                    form.method = 'post';
+                    form.action = actionUrl;
+                    form.style.display = 'none';
+
+                    function addField(name, value) {
+                        var el = document.createElement('input');
+                        el.type = 'hidden';
+                        el.name = name;
+                        el.value = value;
+                        form.appendChild(el);
+                    }
+                    addField('action', 've_clear_event_tickets');
+                    addField('event_id', eventId);
+                    addField('ve_clear_tickets_nonce', nonce);
+                    addField('confirm_title', input.value);
+
+                    document.body.appendChild(form);
+                    form.submit();
+                });
+            })();
+            </script>
+        <?php endif; ?>
+    </div>
+    <?php
+}
+
+add_action('admin_post_ve_clear_event_tickets', 've_handle_clear_event_tickets');
+function ve_handle_clear_event_tickets() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Sorry, you are not allowed to clear tickets.', 'venture-events'), 403);
+    }
+
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    $nonce    = isset($_POST['ve_clear_tickets_nonce']) ? (string) wp_unslash($_POST['ve_clear_tickets_nonce']) : '';
+
+    if ($event_id < 1 || !wp_verify_nonce($nonce, 've_clear_event_tickets_' . $event_id)) {
+        wp_die(__('Invalid request (security check failed).', 'venture-events'), 403);
+    }
+
+    $post = get_post($event_id);
+    if (!$post || $post->post_type !== 've_event') {
+        wp_die(__('Event not found.', 'venture-events'), 404);
+    }
+
+    $expected = (string) $post->post_title;
+    $typed    = isset($_POST['confirm_title']) ? (string) wp_unslash($_POST['confirm_title']) : '';
+    // Exact match (GitHub-style), with trim so accidental edge spaces don't block
+    $match = ($expected !== '' && ($typed === $expected || trim($typed) === trim($expected)));
+    if (!$match) {
+        set_transient(
+            've_clear_tickets_notice_' . get_current_user_id(),
+            [
+                'type'    => 'error',
+                'message' => 'Clear cancelled: event name did not match exactly. Nothing was deleted.',
+            ],
+            60
+        );
+        wp_safe_redirect(get_edit_post_link($event_id, 'raw'));
+        exit;
+    }
+
+    if (!function_exists('ve_clear_event_registrations')) {
+        wp_die(__('Clear function unavailable.', 'venture-events'), 500);
+    }
+
+    $result = ve_clear_event_registrations($event_id);
+
+    if (!empty($result['error'])) {
+        set_transient(
+            've_clear_tickets_notice_' . get_current_user_id(),
+            [
+                'type'    => 'error',
+                'message' => 'Could not clear tickets (error: ' . $result['error'] . '). Check debug.log.',
+            ],
+            60
+        );
+    } else {
+        $n  = (int) $result['deleted'];
+        $qr = (int) $result['qr_files_removed'];
+        set_transient(
+            've_clear_tickets_notice_' . get_current_user_id(),
+            [
+                'type'    => 'success',
+                'message' => sprintf(
+                    'Cleared %d registration(s) for “%s”. Removed %d QR image file(s).',
+                    $n,
+                    $expected,
+                    $qr
+                ),
+            ],
+            60
+        );
+    }
+
+    wp_safe_redirect(get_edit_post_link($event_id, 'raw'));
+    exit;
+}
+
+add_action('admin_notices', 've_clear_tickets_admin_notice');
+function ve_clear_tickets_admin_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $key  = 've_clear_tickets_notice_' . get_current_user_id();
+    $data = get_transient($key);
+    if (!$data || !is_array($data)) {
+        return;
+    }
+    delete_transient($key);
+
+    $type = ($data['type'] ?? '') === 'success' ? 'success' : 'error';
+    $msg  = (string) ($data['message'] ?? '');
+    if ($msg === '') {
+        return;
+    }
+    printf(
+        '<div class="notice notice-%1$s is-dismissible"><p>%2$s</p></div>',
+        esc_attr($type),
+        esc_html($msg)
+    );
 }
 
 // ====================== GUEST LIST PAGE ======================
@@ -526,7 +865,16 @@ function ve_settings_page() {
     }
 
     $api_result = '';
-    if (isset($_POST['ve_zoho_self_check']) && function_exists('ve_zoho_permission_self_check')) {
+    if (isset($_POST['ve_zoho_list_taxes']) && function_exists('ve_zoho_list_taxes')) {
+        $check = ve_zoho_list_taxes();
+        $api_result = implode("\n", $check['lines']);
+        // One-click apply suggested 15% tax_id if requested
+        if (!empty($_POST['ve_zoho_apply_suggested_tax']) && !empty($check['suggest_domestic'])) {
+            update_option('ve_zoho_tax_id_domestic', sanitize_text_field($check['suggest_domestic']));
+            $api_result .= "\n\nSaved Domestic tax_id = " . $check['suggest_domestic'];
+            echo '<div class="notice notice-success"><p>Domestic tax_id saved from Zoho 15% tax.</p></div>';
+        }
+    } elseif (isset($_POST['ve_zoho_self_check']) && function_exists('ve_zoho_permission_self_check')) {
         $check = ve_zoho_permission_self_check();
         $api_result = implode("\n", $check['lines']);
     } elseif (isset($_POST['ve_zoho_api_test'])) {
@@ -645,13 +993,12 @@ function ve_settings_page() {
                     </td>
                 </tr>
                 <tr>
-                    <th>Tax IDs (optional)</th>
+                    <th>Tax IDs</th>
                     <td>
-                        <p class="description">Org-specific Zoho tax_id values from Settings → Taxes. Leave blank to omit tax_id on line items.</p>
-                        <label>Domestic (e.g. Namibia):</label><br>
-                        <input type="text" name="tax_id_domestic" value="<?php echo esc_attr(get_option('ve_zoho_tax_id_domestic', '')); ?>" size="40" placeholder="Zoho tax_id"><br>
-                        <label style="margin-top:6px;display:inline-block;">Export / non-domestic:</label><br>
-                        <input type="text" name="tax_id_export" value="<?php echo esc_attr(get_option('ve_zoho_tax_id_export', '')); ?>" size="40" placeholder="Zoho tax_id">
+                        <label>Domestic override (optional):</label><br>
+                        <input type="text" name="tax_id_domestic" value="<?php echo esc_attr(get_option('ve_zoho_tax_id_domestic', '')); ?>" size="40" placeholder="2737296000000102001"><br>
+                        <label style="margin-top:6px;display:inline-block;">Export override (optional):</label><br>
+                        <input type="text" name="tax_id_export" value="<?php echo esc_attr(get_option('ve_zoho_tax_id_export', '')); ?>" size="40" placeholder="2737296000000102009">
                     </td>
                 </tr>
                 <tr>
@@ -672,6 +1019,20 @@ function ve_settings_page() {
                 </tr>
             </table>
             <button type="submit" name="ve_zoho_settings" class="button button-primary">Save Zoho Settings</button>
+        </form>
+
+        <hr>
+        <h2>List taxes (optional)</h2>
+        <p>
+            Plugin defaults (original hardcodes): Domestic <code>2737296000000102001</code>, Export <code>2737296000000102009</code>.
+            Use this only if you need to verify or override IDs against Zoho.
+        </p>
+        <p>
+            Effective Domestic: <code><?php echo esc_html(function_exists('ve_zoho_resolve_tax_id') ? ve_zoho_resolve_tax_id(true) : '2737296000000102001'); ?></code>
+            · Export: <code><?php echo esc_html(function_exists('ve_zoho_resolve_tax_id') ? ve_zoho_resolve_tax_id(false) : '2737296000000102009'); ?></code>
+        </p>
+        <form method="post" style="margin-bottom:12px;">
+            <button type="submit" name="ve_zoho_list_taxes" class="button button-secondary">List taxes from Zoho</button>
         </form>
 
         <hr>

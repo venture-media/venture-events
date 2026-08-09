@@ -3,7 +3,7 @@
  * Plugin Name:       Venture Events
  * Plugin URI:        https://github.com/venture-media/venture-events
  * Description:       Event registration with flexible payment gateways + Zoho Books invoicing + QR tickets.
- * Version:           0.9.12
+ * Version:           0.9.21.0
  * Author:            Leon de Klerk
  * Author URI:        https://github.com/Leon2332
  * License:           MIT
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('VE_VERSION', '0.9.12');
+define('VE_VERSION', '0.9.21.0');
 define('VE_PATH', plugin_dir_path(__FILE__));
 define('VE_URL', plugin_dir_url(__FILE__));
 
@@ -33,6 +33,9 @@ function ve_activate() {
     ve_add_rewrite_rules();
     flush_rewrite_rules();
     update_option('ve_rewrite_version', VE_VERSION, false);
+    if (function_exists('ve_schedule_pending_cleanup')) {
+        ve_schedule_pending_cleanup();
+    }
 }
 
 // Ensure schema upgrades run after plugin file updates (not only on activate)
@@ -46,9 +49,19 @@ add_action('plugins_loaded', function () {
     update_option('ve_db_version', VE_VERSION, false);
 }, 5);
 
-// Deactivation (optional - keeps all data)
+// Ensure cron is registered even when the plugin was updated without re-activate
+add_action('init', function () {
+    if (function_exists('ve_schedule_pending_cleanup')) {
+        ve_schedule_pending_cleanup();
+    }
+}, 30);
+
+// Deactivation (optional - keeps all data; clears scheduled cleanup)
 register_deactivation_hook(__FILE__, 've_deactivate');
 function ve_deactivate() {
+    if (function_exists('ve_unschedule_pending_cleanup')) {
+        ve_unschedule_pending_cleanup();
+    }
     flush_rewrite_rules();
 }
 
@@ -139,6 +152,120 @@ function ve_registration_form_shortcode($atts) {
     return ob_get_clean();
 }
 
+// Complimentary tickets (admin only): [venture_complimentary event_id="123"]
+add_shortcode('venture_complimentary', 've_complimentary_form_shortcode');
+function ve_complimentary_form_shortcode($atts) {
+    $atts     = shortcode_atts(['event_id' => ''], $atts, 'venture_complimentary');
+    $event_id = absint($atts['event_id']);
+
+    ve_enqueue_registration_assets(true);
+
+    if (!$event_id) {
+        return '<p class="ve-error">Error: Provide event_id, e.g. [venture_complimentary event_id="123"].</p>';
+    }
+
+    if (get_post_type($event_id) !== 've_event') {
+        return '<p class="ve-error">Error: Event not found.</p>';
+    }
+
+    // Ensure shortcode att is available to the template as $atts
+    $atts = ['event_id' => (string) $event_id];
+
+    ob_start();
+    $template = VE_PATH . 'templates/registration-form-complimentary.php';
+    if (file_exists($template)) {
+        include $template;
+    } else {
+        echo '<p class="ve-error">Error: Complimentary form template missing.</p>';
+    }
+    return ob_get_clean();
+}
+
+// Gate scanner shortcode (per event): [venture_gate_scan event_id="123"]
+add_shortcode('venture_gate_scan', 've_gate_scan_shortcode');
+function ve_gate_scan_shortcode($atts) {
+    $atts     = shortcode_atts(['event_id' => ''], $atts, 'venture_gate_scan');
+    $event_id = absint($atts['event_id']);
+
+    ve_enqueue_gate_scan_assets(true);
+
+    if (!$event_id) {
+        return '<p class="ve-error">Error: Provide event_id, e.g. [venture_gate_scan event_id="123"].</p>';
+    }
+
+    if (get_post_type($event_id) !== 've_event') {
+        return '<p class="ve-error">Error: Event not found.</p>';
+    }
+
+    $event_title = get_the_title($event_id);
+    $can_scan    = function_exists('ve_user_can_gate_scan') && ve_user_can_gate_scan();
+    $logged_in   = is_user_logged_in();
+
+    ob_start();
+    $template = VE_PATH . 'templates/gate-scan.php';
+    if (file_exists($template)) {
+        include $template;
+    } else {
+        echo '<p class="ve-error">Error: Gate scan template missing.</p>';
+    }
+    return ob_get_clean();
+}
+
+/**
+ * Register + enqueue assets for the gate scanner shortcode.
+ *
+ * @param bool $force
+ */
+function ve_enqueue_gate_scan_assets($force = false) {
+    static $done = false;
+
+    $should_load = $force
+        || (is_singular() && has_shortcode(get_post()->post_content ?? '', 'venture_gate_scan'));
+
+    if (!$should_load) {
+        return;
+    }
+
+    if (!$done) {
+        wp_register_style(
+            'venture-events-gate-scan',
+            VE_URL . 'assets/gate-scan.css',
+            [],
+            VE_VERSION
+        );
+
+        wp_register_script(
+            'html5-qrcode',
+            VE_URL . 'assets/html5-qrcode.min.js',
+            [],
+            '2.3.8',
+            true
+        );
+
+        wp_register_script(
+            'venture-events-gate-scan',
+            VE_URL . 'assets/gate-scan.js',
+            ['html5-qrcode'],
+            VE_VERSION,
+            true
+        );
+
+        $done = true;
+    }
+
+    wp_enqueue_style('venture-events-gate-scan');
+    wp_enqueue_script('html5-qrcode');
+    wp_enqueue_script('venture-events-gate-scan');
+
+    // Shortcodes may run after wp_head; print CSS immediately when needed.
+    if (did_action('wp_enqueue_scripts') && !doing_action('wp_enqueue_scripts')) {
+        if (wp_style_is('venture-events-gate-scan', 'enqueued') && !wp_style_is('venture-events-gate-scan', 'done')) {
+            wp_print_styles('venture-events-gate-scan');
+        }
+    }
+}
+add_action('wp_enqueue_scripts', 've_enqueue_gate_scan_assets');
+
 // ====================== GATEWAY SYSTEM ======================
 
 // Initialize the Gateway Manager
@@ -221,8 +348,12 @@ function ve_read_qr_template() {
 function ve_enqueue_registration_assets($force = false) {
     static $done = false;
 
+    $content = is_singular() ? (get_post()->post_content ?? '') : '';
     $should_load = $force
-        || (is_singular() && has_shortcode(get_post()->post_content ?? '', 'venture_registration'));
+        || ($content !== '' && (
+            has_shortcode($content, 'venture_registration')
+            || has_shortcode($content, 'venture_complimentary')
+        ));
 
     if (!$should_load) {
         return;
@@ -250,6 +381,11 @@ function ve_enqueue_registration_assets($force = false) {
         wp_localize_script('venture-events-frontend', 'veGateway', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('ve_registration_nonce'),
+        ]);
+
+        wp_localize_script('venture-events-frontend', 'veComplimentary', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce'    => wp_create_nonce('ve_complimentary_nonce'),
         ]);
 
         $done = true;
