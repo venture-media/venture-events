@@ -3,10 +3,12 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Venture Events – Zoho Books Integration
- * Version: 0.9.7
+ * Version: 0.9.8
  *
  * WEB_POS customers: exactly one contact person (accounting_email),
  * create on new / update on reuse; invoices associate + email that person.
+ * Contact identity is company name when provided, else person name — never
+ * merge personal and company customers by shared accounting email alone.
  */
 
 /**
@@ -148,17 +150,31 @@ function ve_zoho_contacts_request($token, $org_id, array $query_args) {
 
 /**
  * Find a matching contact in a Zoho contacts list response.
+ *
+ * Reuse is keyed by the intended customer identity (desired WEB_POS contact name /
+ * base company-or-person name), NOT by email alone.
+ *
+ * Why: the same accounting email is often used for company purchases and personal
+ * ticket purchases. Matching on email alone would invoice personal buys to the
+ * company contact (and vice versa). Blank "Company / Organisation Name" must create
+ * or reuse "WEB_POS / First Last", never attach to a prior company contact.
+ *
+ * @param array|null $body
+ * @param string     $desired_contact_name e.g. "WEB_POS / Acme" or "WEB_POS / Jane Doe"
+ * @param string     $base_name            billing_company, or person name if blank
+ * @param string     $email                unused for matching (kept for call-site compatibility)
  */
-function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email) {
+function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email = '') {
     if (empty($body['contacts']) || !is_array($body['contacts'])) {
         return null;
     }
 
     $desired_lower = strtolower(trim($desired_contact_name));
     $base_lower    = strtolower(trim($base_name));
-    $email_lower   = strtolower(trim((string) $email));
+    // "WEB_POS / {base}" suffix form (Zoho contact_name we create)
+    $webpos_base_lower = $base_lower !== '' ? strtolower('WEB_POS / ' . trim($base_name)) : '';
 
-    // 1) Exact contact_name match (preferred)
+    // 1) Exact contact_name match (preferred) — company or personal identity as billed
     foreach ($body['contacts'] as $contact) {
         $name = strtolower(trim($contact['contact_name'] ?? ''));
         if ($name !== '' && $name === $desired_lower) {
@@ -166,32 +182,28 @@ function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_nam
         }
     }
 
-    // 2) Exact email match among WEB_POS contacts
-    if ($email_lower !== '') {
+    // 2) Exact WEB_POS / base_name (same identity; handles minor desired-name formatting drift)
+    if ($webpos_base_lower !== '' && $webpos_base_lower !== $desired_lower) {
         foreach ($body['contacts'] as $contact) {
-            $c_email = strtolower(trim($contact['email'] ?? ''));
-            $c_name  = $contact['contact_name'] ?? '';
-            if ($c_email === $email_lower && stripos($c_name, 'WEB_POS') !== false) {
+            $name = strtolower(trim($contact['contact_name'] ?? ''));
+            if ($name === $webpos_base_lower) {
                 return $contact;
             }
         }
     }
 
-    // 3) Fuzzy: WEB_POS + base company/person name
-    if ($base_lower !== '') {
-        foreach ($body['contacts'] as $contact) {
-            $c_name = $contact['contact_name'] ?? '';
-            if (stripos($c_name, 'WEB_POS') !== false && stripos($c_name, $base_name) !== false) {
-                return $contact;
-            }
-        }
-    }
+    // Do NOT match on email alone. Shared accounting emails must not merge personal
+    // and company WEB_POS customers.
 
     return null;
 }
 
 /**
- * Look up an existing WEB_POS contact using multiple Zoho search strategies.
+ * Look up an existing WEB_POS contact for this checkout's intended identity.
+ *
+ * Identity = billing_company when set, otherwise ticket holder first+last name.
+ * Email is only used as an extra search probe (Zoho name filter can be flaky);
+ * a hit is accepted only when contact_name matches the desired identity.
  *
  * Important: Zoho's contact_name filter is NOT a reliable "contains WEB_POS" scan.
  * Searching only for "WEB_POS" often returns nothing useful, while create then fails
@@ -209,7 +221,9 @@ function ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $
         return $match['contact_id'];
     }
 
-    // Strategy B: search by accounting email
+    // Strategy B: search by accounting email (probe only — still requires name match)
+    // Finds the personal or company WEB_POS row when the name filter missed it, without
+    // reusing a different identity that happens to share the email.
     if ($email !== '') {
         $body = ve_zoho_contacts_request($token, $org_id, [
             'email'    => $email,
@@ -217,12 +231,16 @@ function ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $
         ]);
         $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email);
         if ($match) {
-            error_log("Venture Events Zoho: ✅ Found contact via email search → contact_id={$match['contact_id']} (name: {$match['contact_name']})");
+            error_log("Venture Events Zoho: ✅ Found contact via email probe + name match → contact_id={$match['contact_id']} (name: {$match['contact_name']})");
             return $match['contact_id'];
         }
+        error_log(
+            "Venture Events Zoho: Email probe for '{$email}' found no contact named '{$desired_contact_name}' "
+            . '(will not reuse a different company/person with the same email)'
+        );
     }
 
-    // Strategy C: search by company / base name (without relying on WEB_POS alone)
+    // Strategy C: search by company / base name (still requires exact identity match)
     if ($base_name !== '') {
         $body = ve_zoho_contacts_request($token, $org_id, [
             'contact_name' => $base_name,
@@ -741,9 +759,12 @@ function ve_zoho_ensure_contact_billing_email($token, $org_id, $contact_id, $reg
  * Get or create Zoho Books WEB_POS contact and upsert its sole contact person.
  *
  * Strategy:
- * - Always use "WEB_POS / Company Name" (or person name) for online ticket sales.
- * - One contact person per customer: create on new, update on reuse from accounting_email.
- * - If create says "already exists" (code 3062) → re-lookup and upsert person.
+ * - Contact identity = billing_company when provided, else ticket holder first+last name.
+ * - Always use "WEB_POS / {identity}" for online ticket sales.
+ * - Never reuse a different WEB_POS customer solely because accounting_email matches
+ *   (personal vs company purchases may share an email).
+ * - One contact person per customer: create on new, update on reuse.
+ * - If create says "already exists" (code 3062) → re-lookup by identity and upsert person.
  *
  * @return array{contact_id:string,contact_person_id:?string,email:string}|false
  */
@@ -756,11 +777,17 @@ function ve_zoho_get_or_create_contact($reg) {
         return false;
     }
 
-    $base_name            = trim($reg->billing_company ?: ($reg->first_name . ' ' . ($reg->last_name ?? '')));
+    // Blank company → personal invoice under the ticket holder's name (not email-linked company).
+    $billing_company      = trim((string) ($reg->billing_company ?? ''));
+    $person_name          = trim(($reg->first_name ?? '') . ' ' . ($reg->last_name ?? ''));
+    $base_name            = $billing_company !== '' ? $billing_company : $person_name;
     $desired_contact_name = 'WEB_POS / ' . $base_name;
     $email                = ve_zoho_billing_email_from_reg($reg);
 
-    error_log("Venture Events Zoho: Looking for existing WEB_POS contact → desired_name='{$desired_contact_name}' email='{$email}'");
+    error_log(
+        "Venture Events Zoho: Looking for existing WEB_POS contact → desired_name='{$desired_contact_name}' "
+        . "email='{$email}' billing_company=" . ($billing_company !== '' ? "'{$billing_company}'" : '(blank → personal)')
+    );
 
     if ($email === '') {
         error_log('Venture Events Zoho: ⚠ Registration has empty accounting_email — invoice cannot be emailed');
@@ -790,7 +817,8 @@ function ve_zoho_get_or_create_contact($reg) {
 
     $payload = [
         'contact_name'    => $desired_contact_name,
-        'company_name'    => $reg->billing_company ?: $base_name,
+        // company_name follows identity: explicit billing_company, or person name when blank
+        'company_name'    => $base_name,
         'email'           => $email,
         'phone'           => $reg->phone ?? '',
         'billing_address' => ve_zoho_billing_address_from_reg($reg),
