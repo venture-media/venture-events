@@ -630,6 +630,12 @@
 	color: var(--ve-secondary, #7a7a7a);
 }
 
+.ve-status-pill.eft {
+	background: rgba(34, 113, 177, 0.12);
+	border-color: #2271b1;
+	color: #2271b1;
+}
+
 /* Bank Windhoek gateway errors inside payment body (if present) */
 .ve-bankwindhoek-error {
 	font-family: var(--ve-font, "Effra", sans-serif);

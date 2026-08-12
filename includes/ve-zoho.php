@@ -3,12 +3,14 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Venture Events – Zoho Books Integration
- * Version: 0.9.8
+ * Version: 0.9.9
  *
- * WEB_POS customers: exactly one contact person (accounting_email),
- * create on new / update on reuse; invoices associate + email that person.
+ * WEB_POS (card) / WEB_EFT (EFT) customers: exactly one contact person
+ * (accounting_email), create on new / update on reuse; invoices associate
+ * + email that person.
  * Contact identity is company name when provided, else person name — never
  * merge personal and company customers by shared accounting email alone.
+ * Card and EFT customers stay in separate prefix namespaces.
  */
 
 /**
@@ -160,19 +162,21 @@ function ve_zoho_contacts_request($token, $org_id, array $query_args) {
  * or reuse "WEB_POS / First Last", never attach to a prior company contact.
  *
  * @param array|null $body
- * @param string     $desired_contact_name e.g. "WEB_POS / Acme" or "WEB_POS / Jane Doe"
+ * @param string     $desired_contact_name e.g. "WEB_POS / Acme" or "WEB_EFT / Jane Doe"
  * @param string     $base_name            billing_company, or person name if blank
  * @param string     $email                unused for matching (kept for call-site compatibility)
+ * @param string     $name_prefix          WEB_POS or WEB_EFT
  */
-function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email = '') {
+function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email = '', $name_prefix = 'WEB_POS') {
     if (empty($body['contacts']) || !is_array($body['contacts'])) {
         return null;
     }
 
+    $name_prefix = ve_zoho_contact_name_prefix($name_prefix);
     $desired_lower = strtolower(trim($desired_contact_name));
     $base_lower    = strtolower(trim($base_name));
-    // "WEB_POS / {base}" suffix form (Zoho contact_name we create)
-    $webpos_base_lower = $base_lower !== '' ? strtolower('WEB_POS / ' . trim($base_name)) : '';
+    // "{prefix} / {base}" form (Zoho contact_name we create)
+    $prefixed_base_lower = $base_lower !== '' ? strtolower($name_prefix . ' / ' . trim($base_name)) : '';
 
     // 1) Exact contact_name match (preferred) — company or personal identity as billed
     foreach ($body['contacts'] as $contact) {
@@ -182,20 +186,34 @@ function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_nam
         }
     }
 
-    // 2) Exact WEB_POS / base_name (same identity; handles minor desired-name formatting drift)
-    if ($webpos_base_lower !== '' && $webpos_base_lower !== $desired_lower) {
+    // 2) Exact {prefix} / base_name (same identity; handles minor desired-name formatting drift)
+    if ($prefixed_base_lower !== '' && $prefixed_base_lower !== $desired_lower) {
         foreach ($body['contacts'] as $contact) {
             $name = strtolower(trim($contact['contact_name'] ?? ''));
-            if ($name === $webpos_base_lower) {
+            if ($name === $prefixed_base_lower) {
                 return $contact;
             }
         }
     }
 
     // Do NOT match on email alone. Shared accounting emails must not merge personal
-    // and company WEB_POS customers.
+    // and company customers, or WEB_POS with WEB_EFT.
 
     return null;
+}
+
+/**
+ * Zoho contact_name prefix. Card checkout = WEB_POS; EFT checkout = WEB_EFT.
+ *
+ * @param string $name_prefix
+ * @return string
+ */
+function ve_zoho_contact_name_prefix($name_prefix) {
+    $name_prefix = strtoupper(trim((string) $name_prefix));
+    if ($name_prefix === 'WEB_EFT') {
+        return 'WEB_EFT';
+    }
+    return 'WEB_POS';
 }
 
 /**
@@ -209,27 +227,29 @@ function ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_nam
  * Searching only for "WEB_POS" often returns nothing useful, while create then fails
  * with code 3062 ("customer already exists").
  */
-function ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email) {
+function ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email, $name_prefix = 'WEB_POS') {
+    $name_prefix = ve_zoho_contact_name_prefix($name_prefix);
+
     // Strategy A: search by full desired name (best for reuse)
     $body = ve_zoho_contacts_request($token, $org_id, [
         'contact_name' => $desired_contact_name,
         'per_page'     => 25,
     ]);
-    $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email);
+    $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email, $name_prefix);
     if ($match) {
         error_log("Venture Events Zoho: ✅ Found contact via name search → contact_id={$match['contact_id']} (name: {$match['contact_name']})");
         return $match['contact_id'];
     }
 
     // Strategy B: search by accounting email (probe only — still requires name match)
-    // Finds the personal or company WEB_POS row when the name filter missed it, without
-    // reusing a different identity that happens to share the email.
+    // Finds the personal or company row when the name filter missed it, without
+    // reusing a different identity (or WEB_POS vs WEB_EFT) that happens to share the email.
     if ($email !== '') {
         $body = ve_zoho_contacts_request($token, $org_id, [
             'email'    => $email,
             'per_page' => 50,
         ]);
-        $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email);
+        $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email, $name_prefix);
         if ($match) {
             error_log("Venture Events Zoho: ✅ Found contact via email probe + name match → contact_id={$match['contact_id']} (name: {$match['contact_name']})");
             return $match['contact_id'];
@@ -246,7 +266,7 @@ function ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $
             'contact_name' => $base_name,
             'per_page'     => 50,
         ]);
-        $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email);
+        $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email, $name_prefix);
         if ($match) {
             error_log("Venture Events Zoho: ✅ Found contact via base-name search → contact_id={$match['contact_id']} (name: {$match['contact_name']})");
             return $match['contact_id'];
@@ -256,7 +276,7 @@ function ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $
             'company_name' => $base_name,
             'per_page'     => 50,
         ]);
-        $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email);
+        $match = ve_zoho_match_contact_from_list($body, $desired_contact_name, $base_name, $email, $name_prefix);
         if ($match) {
             error_log("Venture Events Zoho: ✅ Found contact via company_name search → contact_id={$match['contact_id']} (name: {$match['contact_name']})");
             return $match['contact_id'];
@@ -756,19 +776,21 @@ function ve_zoho_ensure_contact_billing_email($token, $org_id, $contact_id, $reg
 }
 
 /**
- * Get or create Zoho Books WEB_POS contact and upsert its sole contact person.
+ * Get or create Zoho Books WEB_POS / WEB_EFT contact and upsert its sole contact person.
  *
  * Strategy:
  * - Contact identity = billing_company when provided, else ticket holder first+last name.
- * - Always use "WEB_POS / {identity}" for online ticket sales.
- * - Never reuse a different WEB_POS customer solely because accounting_email matches
+ * - Card: "WEB_POS / {identity}". EFT: "WEB_EFT / {identity}". Prefixes never mix.
+ * - Never reuse a different customer solely because accounting_email matches
  *   (personal vs company purchases may share an email).
  * - One contact person per customer: create on new, update on reuse.
  * - If create says "already exists" (code 3062) → re-lookup by identity and upsert person.
  *
+ * @param object $reg
+ * @param string $name_prefix WEB_POS or WEB_EFT
  * @return array{contact_id:string,contact_person_id:?string,email:string}|false
  */
-function ve_zoho_get_or_create_contact($reg) {
+function ve_zoho_get_or_create_contact($reg, $name_prefix = 'WEB_POS') {
     $token  = ve_get_zoho_token();
     $org_id = get_option('ve_zoho_org_id');
 
@@ -781,11 +803,12 @@ function ve_zoho_get_or_create_contact($reg) {
     $billing_company      = trim((string) ($reg->billing_company ?? ''));
     $person_name          = trim(($reg->first_name ?? '') . ' ' . ($reg->last_name ?? ''));
     $base_name            = $billing_company !== '' ? $billing_company : $person_name;
-    $desired_contact_name = 'WEB_POS / ' . $base_name;
+    $name_prefix          = ve_zoho_contact_name_prefix($name_prefix);
+    $desired_contact_name = $name_prefix . ' / ' . $base_name;
     $email                = ve_zoho_billing_email_from_reg($reg);
 
     error_log(
-        "Venture Events Zoho: Looking for existing WEB_POS contact → desired_name='{$desired_contact_name}' "
+        "Venture Events Zoho: Looking for existing {$name_prefix} contact → desired_name='{$desired_contact_name}' "
         . "email='{$email}' billing_company=" . ($billing_company !== '' ? "'{$billing_company}'" : '(blank → personal)')
     );
 
@@ -807,9 +830,9 @@ function ve_zoho_get_or_create_contact($reg) {
         ];
     };
 
-    $existing_contact_id = ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email);
+    $existing_contact_id = ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email, $name_prefix);
     if ($existing_contact_id) {
-        error_log("Venture Events Zoho: Reusing WEB_POS contact_id={$existing_contact_id} — updating address + sole contact person");
+        error_log("Venture Events Zoho: Reusing {$name_prefix} contact_id={$existing_contact_id} — updating address + sole contact person");
         return $finish($existing_contact_id);
     }
 
@@ -837,7 +860,7 @@ function ve_zoho_get_or_create_contact($reg) {
         ];
     }
 
-    error_log('Venture Events Zoho: No existing WEB_POS contact found. Creating NEW → ' . wp_json_encode($payload));
+    error_log("Venture Events Zoho: No existing {$name_prefix} contact found. Creating NEW → " . wp_json_encode($payload));
 
     $response = wp_remote_post(ve_zoho_books_url('/contacts', [], $org_id), [
         'timeout' => 30,
@@ -859,7 +882,7 @@ function ve_zoho_get_or_create_contact($reg) {
 
     if (!empty($body['contact']['contact_id'])) {
         $contact_id = $body['contact']['contact_id'];
-        error_log("Venture Events Zoho: ✅ NEW WEB_POS contact created → contact_id={$contact_id}");
+        error_log("Venture Events Zoho: ✅ NEW {$name_prefix} contact created → contact_id={$contact_id}");
         // Upsert guarantees a person even if nested contact_persons was ignored
         return $finish($contact_id);
     }
@@ -869,7 +892,7 @@ function ve_zoho_get_or_create_contact($reg) {
     $code = isset($body['code']) ? (int) $body['code'] : 0;
     if ($code === 3062 || stripos($raw_body, 'already exists') !== false) {
         error_log('Venture Events Zoho: Create reported existing contact — re-running lookup');
-        $existing_contact_id = ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email);
+        $existing_contact_id = ve_zoho_find_existing_contact($token, $org_id, $desired_contact_name, $base_name, $email, $name_prefix);
         if ($existing_contact_id) {
             return $finish($existing_contact_id);
         }
@@ -971,59 +994,92 @@ function ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id) {
 }
 
 /**
- * Generate Zoho Books Invoice — ONLY after successful gateway payment.
+ * Generate Zoho Books Invoice.
  *
- * HARD GATE (Leon / D20): Never create a Zoho invoice of any status (including draft)
- * unless every registration for the payment_reference is status=paid with paid_at set.
- * Do not call this from checkout, pending save, or complimentary flows.
+ * Card / D20: ONLY after successful gateway payment. Never create a Zoho invoice
+ * of any status (including draft) unless every registration for the payment_reference
+ * is status=paid with paid_at set. Do not call this from pending save or complimentary.
+ *
+ * EFT / D22: `$mode = 'eft'` after EFT shortcode fulfillment (status=eft on all rows).
+ * Creates draft, emails it (Zoho typically marks Sent), does NOT record payment.
+ * Terms = Net 30. Contact prefix = WEB_EFT.
  *
  * @param object      $reg
  * @param int         $event_id
  * @param string|null $contact_id Optional customer id; person is still upserted from accounting_email
+ * @param string      $mode       'paid' (default, card) or 'eft'
  */
-function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
+function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null, $mode = 'paid') {
     $token  = ve_get_zoho_token();
     $org_id = get_option('ve_zoho_org_id');
+    $is_eft = ($mode === 'eft');
 
     if (!$token || !$org_id) {
         error_log('Venture Events: Zoho token or org_id missing for invoice');
         return false;
     }
 
-    // --- Payment confirmation gate (no draft invoices without paid regs) ---
+    // --- Confirmation gate ---
     $payment_reference = trim((string) ($reg->payment_reference ?? $reg->internal_reference ?? ''));
     if ($payment_reference === '') {
         error_log('Venture Events Zoho: ❌ Refusing invoice create — missing payment_reference on registration');
         return false;
     }
 
-    if (function_exists('ve_payment_reference_fully_paid') && !ve_payment_reference_fully_paid($payment_reference)) {
-        error_log(
-            "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — "
-            . "not fully paid in ve_registrations (status=paid + paid_at required for all rows)"
-        );
-        return false;
-    }
-
-    // Prefer DB-paid line items so draft payload cannot use pending rows
-    if (function_exists('ve_get_paid_registrations_by_reference')) {
-        $paid_lines = ve_get_paid_registrations_by_reference($payment_reference);
-        if (empty($paid_lines)) {
+    if ($is_eft) {
+        if (function_exists('ve_payment_reference_fully_eft') && !ve_payment_reference_fully_eft($payment_reference)) {
             error_log(
-                "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — no paid rows"
+                "Venture Events Zoho: ❌ Refusing EFT invoice create for ref={$payment_reference} — "
+                . "not fully eft in ve_registrations (status=eft required for all rows)"
             );
             return false;
         }
-        $reg = $paid_lines[0];
-        $reg->line_items = $paid_lines;
-    } else {
-        // Fallback: single-row must itself be paid
-        if ((string) ($reg->status ?? '') !== 'paid' || empty($reg->paid_at)) {
+        if (function_exists('ve_get_eft_registrations_by_reference')) {
+            $eft_lines = ve_get_eft_registrations_by_reference($payment_reference);
+            if (empty($eft_lines)) {
+                error_log(
+                    "Venture Events Zoho: ❌ Refusing EFT invoice create for ref={$payment_reference} — no eft rows"
+                );
+                return false;
+            }
+            $reg = $eft_lines[0];
+            $reg->line_items = $eft_lines;
+        } elseif ((string) ($reg->status ?? '') !== 'eft') {
             error_log(
-                "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — "
-                . "registration #{$reg->id} is not paid"
+                "Venture Events Zoho: ❌ Refusing EFT invoice create for ref={$payment_reference} — "
+                . "registration #{$reg->id} is not eft"
             );
             return false;
+        }
+    } else {
+        if (function_exists('ve_payment_reference_fully_paid') && !ve_payment_reference_fully_paid($payment_reference)) {
+            error_log(
+                "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — "
+                . "not fully paid in ve_registrations (status=paid + paid_at required for all rows)"
+            );
+            return false;
+        }
+
+        // Prefer DB-paid line items so draft payload cannot use pending rows
+        if (function_exists('ve_get_paid_registrations_by_reference')) {
+            $paid_lines = ve_get_paid_registrations_by_reference($payment_reference);
+            if (empty($paid_lines)) {
+                error_log(
+                    "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — no paid rows"
+                );
+                return false;
+            }
+            $reg = $paid_lines[0];
+            $reg->line_items = $paid_lines;
+        } else {
+            // Fallback: single-row must itself be paid
+            if ((string) ($reg->status ?? '') !== 'paid' || empty($reg->paid_at)) {
+                error_log(
+                    "Venture Events Zoho: ❌ Refusing invoice create for ref={$payment_reference} — "
+                    . "registration #{$reg->id} is not paid"
+                );
+                return false;
+            }
         }
     }
 
@@ -1031,9 +1087,10 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
     $contact_person_id = null;
 
     // Resolve customer + sole contact person (accounting_email).
-    // Payment already succeeded: we still create the invoice even if person/email fails.
+    // Card: payment already succeeded. EFT: tickets already issued. Still create invoice if person/email fails.
+    $contact_prefix = $is_eft ? 'WEB_EFT' : 'WEB_POS';
     if ($contact_id === null) {
-        $ctx = ve_zoho_get_or_create_contact($reg);
+        $ctx = ve_zoho_get_or_create_contact($reg, $contact_prefix);
         if (!$ctx || empty($ctx['contact_id'])) {
             error_log('Venture Events: Failed to get/create contact for invoice → aborting invoice creation');
             return false;
@@ -1153,8 +1210,8 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
         $zoho_line_items[] = $line;
     }
 
-    // Create invoice only after payment gate above. Starts as draft, then sent + paid + emailed (D19).
-    // Contact person / email are best-effort after the Paid local rows exist.
+    // Create as draft. Card (D19): then sent + paid + emailed.
+    // EFT (D22): then emailed unpaid (Zoho marks Sent); terms Net 30; no customer payment.
     // billing_address on the invoice so PDF country matches this checkout (not a stale contact).
     $payload = [
         'customer_id'      => $contact_id,
@@ -1165,6 +1222,12 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
         'notes'            => 'Ref: ' . ($reg->internal_reference ?? $reg->payment_reference ?? '') . "\n" . ($reg->billing_notes ?? ''),
         'reference_number' => ve_zoho_build_invoice_reference($event_title, $reg),
     ];
+
+    if ($is_eft) {
+        $payload['payment_terms']       = 30;
+        $payload['payment_terms_label'] = 'Net 30';
+        $payload['due_date']            = date('Y-m-d', strtotime('+30 days'));
+    }
 
     $salesperson_id = trim((string) get_option('ve_zoho_salesperson_id', ''));
     if ($salesperson_id !== '') {
@@ -1242,7 +1305,27 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null) {
         ? round((float) $body['invoice']['balance'], 2)
         : $total_amount;
 
-    // LOCKED order (Leon): create draft → mark sent (no email) → record payment → email.
+    // EFT (D22): email the unpaid draft (Zoho typically marks Sent). No customer payment.
+    if ($is_eft) {
+        if ($billing_email !== '') {
+            $emailed = ve_zoho_email_invoice($token, $org_id, $invoice_id, $invoice_number, $billing_email);
+            if (!$emailed) {
+                error_log(
+                    "Venture Events Zoho: ⚠ EFT invoice {$invoice_number} EMAIL FAILED — "
+                    . "recipient was {$billing_email}; marking sent so accounting can still collect"
+                );
+                ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id);
+            }
+        } else {
+            error_log("Venture Events Zoho: ⚠ EFT invoice {$invoice_number} created but not emailed (no accounting email)");
+            ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id);
+        }
+
+        $verify = ve_zoho_get_invoice($token, $org_id, $invoice_id);
+        return $verify ?: $body['invoice'];
+    }
+
+    // LOCKED order (Leon / D19, card only): create draft → mark sent (no email) → record payment → email.
     // Never email the invoice while it is still unpaid. Zoho's /email also marks sent;
     // we mark sent first without mail so payment can apply, then email the Paid PDF.
     $marked = ve_zoho_mark_invoice_sent($token, $org_id, $invoice_id);

@@ -112,6 +112,19 @@ function ve_event_list_column_content($column, $post_id) {
         '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">comp</span></div>',
         esc_html($comp)
     );
+
+    $eft = sprintf('[venture_eft event_id="%d"]', $id);
+    printf(
+        '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">eft</span></div>',
+        esc_html($eft)
+    );
+    if (!empty($special_tiers) && is_array($special_tiers)) {
+        $eft_special = sprintf('[venture_eft event_id="S%d"]', $id);
+        printf(
+            '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">eft special</span></div>',
+            esc_html($eft_special)
+        );
+    }
 }
 
 // ====================== TIERS META BOX ======================
@@ -250,7 +263,7 @@ function ve_special_tiers_meta_box_html($post) {
         (tier chosen here — buyers cannot change it). Use shortcode
         <code>[venture_registration event_id="S<?php echo (int) $post->ID; ?>"]</code> on a separate page.
         Save normal <strong>Event Ticket Tiers</strong> first if you need to pick an included free ticket tier.
-        <strong>Amount available</strong> limits how many of that package can be sold (paid + pending orders count).
+        <strong>Amount available</strong> limits how many of that package can be sold (paid + pending + EFT orders count).
         Use <code>0</code> for unlimited.
     </p>
 

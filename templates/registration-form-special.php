@@ -13,6 +13,10 @@ if (!$event_id) {
     return;
 }
 
+$ve_payment_mode = (isset($ve_payment_mode) && $ve_payment_mode === 'eft') ? 'eft' : 'card';
+$is_eft          = ($ve_payment_mode === 'eft');
+$checkout_label  = $is_eft ? 'Complete order' : 'Proceed to Payment';
+
 $event_title   = get_the_title($event_id);
 $special_tiers = ve_get_special_tiers($event_id);
 $normal_tiers  = ve_get_event_tiers($event_id);
@@ -116,12 +120,17 @@ foreach ($special_tiers as $key => $tier) {
 }
 ?>
 
-<div class="venture-events-registration ve-registration-special" data-mode="special">
+<div class="venture-events-registration ve-registration-special<?php echo $is_eft ? ' ve-eft-form' : ''; ?>" data-mode="special">
     <h2>Register for: <?php echo esc_html($event_title); ?></h2>
+
+    <?php if ($is_eft): ?>
+        <div id="ve-eft-result" class="ve-comp-result" hidden role="status" aria-live="polite"></div>
+    <?php endif; ?>
 
     <form id="ve-registration-form" data-mode="special">
         <input type="hidden" id="ve-event-id" value="<?php echo esc_attr($event_id); ?>">
         <input type="hidden" id="ve-form-mode" value="special">
+        <input type="hidden" id="ve-payment-mode" value="<?php echo esc_attr($ve_payment_mode); ?>">
 
         <div class="ve-package-section">
             <p>
@@ -183,7 +192,7 @@ foreach ($special_tiers as $key => $tier) {
 
             <span class="ve-checkout-wrap is-disabled" title="Complete the form before proceeding">
                 <button type="button" id="ve-checkout-btn" class="ve-btn ve-btn-primary is-disabled" disabled>
-                    Proceed to Payment
+                    <?php echo esc_html($checkout_label); ?>
                 </button>
             </span>
         </div>
@@ -192,6 +201,7 @@ foreach ($special_tiers as $key => $tier) {
 
 <script>
     window.veRegistrationMode = 'special';
+    window.vePaymentMode = <?php echo wp_json_encode($ve_payment_mode); ?>;
     window.veSpecialTiers = <?php echo wp_json_encode($special_js); ?>;
     window.veTierOptions = <?php echo wp_json_encode($tier_options_html); ?>;
     if (!window.veGateway || !window.veGateway.nonce) {
@@ -200,4 +210,12 @@ foreach ($special_tiers as $key => $tier) {
             nonce: <?php echo wp_json_encode(wp_create_nonce('ve_registration_nonce')); ?>
         };
     }
+    <?php if ($is_eft): ?>
+    if (!window.veEft || !window.veEft.nonce) {
+        window.veEft = {
+            ajax_url: <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>,
+            nonce: <?php echo wp_json_encode(wp_create_nonce('ve_eft_nonce')); ?>
+        };
+    }
+    <?php endif; ?>
 </script>

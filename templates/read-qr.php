@@ -27,7 +27,10 @@ $is_gate = function_exists('ve_user_can_gate_scan')
         && in_array('event_gate', (array) (wp_get_current_user()->roles ?? []), true));
 
 if ($is_gate && empty($reg->entered_at) && function_exists('ve_mark_as_entered')) {
-    if ((string) ($reg->status ?? '') === 'paid') {
+    if (function_exists('ve_registration_status_allows_entry')
+        ? ve_registration_status_allows_entry($reg->status ?? '')
+        : ((string) ($reg->status ?? '') === 'paid')
+    ) {
         ve_mark_as_entered($reg->id, get_current_user_id());
         $reg = ve_get_registration($id); // refresh
     }

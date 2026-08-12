@@ -3,7 +3,7 @@
  * Plugin Name:       Venture Events
  * Plugin URI:        https://github.com/venture-media/venture-events
  * Description:       Event registration with flexible payment gateways + Zoho Books invoicing + QR tickets.
- * Version:           0.9.21.1
+ * Version:           0.9.22.0
  * Author:            Leon de Klerk
  * Author URI:        https://github.com/Leon2332
  * License:           MIT
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('VE_VERSION', '0.9.21.1');
+define('VE_VERSION', '0.9.22.0');
 define('VE_PATH', plugin_dir_path(__FILE__));
 define('VE_URL', plugin_dir_url(__FILE__));
 
@@ -178,6 +178,49 @@ function ve_complimentary_form_shortcode($atts) {
     } else {
         echo '<p class="ve-error">Error: Complimentary form template missing.</p>';
     }
+    return ob_get_clean();
+}
+
+// EFT checkout (no gateway): [venture_eft event_id="123"] / [venture_eft event_id="S123"]
+add_shortcode('venture_eft', 've_eft_form_shortcode');
+function ve_eft_form_shortcode($atts) {
+    $atts = shortcode_atts(['event_id' => ''], $atts, 'venture_eft');
+    $parsed   = ve_parse_registration_event_attr($atts['event_id']);
+    $event_id = (int) $parsed['event_id'];
+    $mode     = $parsed['mode'];
+
+    ve_enqueue_registration_assets(true);
+
+    if (!$event_id) {
+        return '<p class="ve-error">Error: Please provide event_id in the shortcode, e.g. [venture_eft event_id="123"] or [venture_eft event_id="S123"] for special packages.</p>';
+    }
+
+    if (get_post_type($event_id) !== 've_event') {
+        return '<p class="ve-error">Error: Event not found.</p>';
+    }
+
+    if ($mode === 'special') {
+        $special = ve_get_special_tiers($event_id);
+        if (empty($special)) {
+            return '<p class="ve-error">Error: This event has no special ticket tiers configured.</p>';
+        }
+    }
+
+    ob_start();
+    $template_path = ($mode === 'special')
+        ? VE_PATH . 'templates/registration-form-special.php'
+        : VE_PATH . 'templates/registration-form.php';
+
+    $ve_registration_mode = $mode;
+    $ve_payment_mode      = 'eft';
+    $atts                 = ['event_id' => (string) $event_id];
+
+    if (file_exists($template_path)) {
+        include $template_path;
+    } else {
+        echo '<p class="ve-error">Error: Registration form template not found at ' . esc_html($template_path) . '</p>';
+    }
+
     return ob_get_clean();
 }
 
@@ -353,6 +396,7 @@ function ve_enqueue_registration_assets($force = false) {
         || ($content !== '' && (
             has_shortcode($content, 'venture_registration')
             || has_shortcode($content, 'venture_complimentary')
+            || has_shortcode($content, 'venture_eft')
         ));
 
     if (!$should_load) {
@@ -386,6 +430,11 @@ function ve_enqueue_registration_assets($force = false) {
         wp_localize_script('venture-events-frontend', 'veComplimentary', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('ve_complimentary_nonce'),
+        ]);
+
+        wp_localize_script('venture-events-frontend', 'veEft', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce'    => wp_create_nonce('ve_eft_nonce'),
         ]);
 
         $done = true;

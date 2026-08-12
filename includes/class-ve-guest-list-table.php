@@ -136,8 +136,13 @@ class VE_Guest_List_Table extends WP_List_Table {
 
             case 'status':                                      // ← NEW
                 $status = $item->status ?? 'pending';
-                $color  = $status === 'paid' ? 'green' : 'orange';
-                return '<strong style="color:' . $color . ';">' . esc_html(ucfirst($status)) . '</strong>';
+                $label  = function_exists('ve_registration_status_label')
+                    ? ve_registration_status_label($status)
+                    : ucfirst((string) $status);
+                $color  = function_exists('ve_registration_status_color')
+                    ? ve_registration_status_color($status)
+                    : ($status === 'paid' ? 'green' : 'orange');
+                return '<strong style="color:' . esc_attr($color) . ';">' . esc_html($label) . '</strong>';
 
             case 'entered_at':
                 if (empty($item->entered_at)) {

@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Venture Events Core Functions
- * Version: 0.9.21.0
+ * Version: 0.9.22.0
  */
 
 /** Hours a pending (unpaid) registration may sit before automatic deletion. */
@@ -118,6 +118,50 @@ function ve_parse_registration_event_attr($raw) {
 }
 
 /**
+ * Statuses that grant a valid ticket (gate + QR page).
+ *
+ * paid  = card / complimentary
+ * eft   = EFT order (invoice outstanding; tickets already issued)
+ *
+ * @param string $status
+ * @return bool
+ */
+function ve_registration_status_allows_entry($status) {
+    return in_array((string) $status, ['paid', 'eft'], true);
+}
+
+/**
+ * Guest/special list label. EFT stays all-caps (ucfirst would show "Eft").
+ *
+ * @param string $status
+ * @return string
+ */
+function ve_registration_status_label($status) {
+    $status = (string) $status;
+    if ($status === 'eft') {
+        return 'EFT';
+    }
+    return $status !== '' ? ucfirst($status) : 'Pending';
+}
+
+/**
+ * Guest/special list colour: paid green, EFT blue, else orange (pending).
+ *
+ * @param string $status
+ * @return string
+ */
+function ve_registration_status_color($status) {
+    $status = (string) $status;
+    if ($status === 'paid') {
+        return 'green';
+    }
+    if ($status === 'eft') {
+        return '#2271b1';
+    }
+    return 'orange';
+}
+
+/**
  * Normal ticket tiers for an event.
  *
  * @param int $event_id
@@ -166,8 +210,9 @@ function ve_get_special_tier($event_id, $key) {
 /**
  * How many package rows are already taken for a special tier.
  *
- * Counts paid + pending package lines only (one package per order).
+ * Counts paid + pending + EFT package lines only (one package per order).
  * Pending holds stock until paid or cleaned up by the 24h TTL.
+ * EFT orders issue tickets immediately, so they consume stock.
  *
  * @param int    $event_id
  * @param string $special_key
@@ -186,7 +231,7 @@ function ve_count_special_tier_sold($event_id, $special_key) {
          WHERE event_id = %d
            AND line_type = 'package'
            AND special_tier_key = %s
-           AND status IN ('pending', 'paid')",
+           AND status IN ('pending', 'paid', 'eft')",
         $event_id,
         $special_key
     ));
@@ -501,11 +546,47 @@ function ve_handle_pending_registrations() {
     }
 
     if ($mode === 'special') {
-        ve_handle_pending_special_registrations($event_id, $billing);
+        ve_handle_pending_special_registrations($event_id, $billing, 'pending');
         return;
     }
 
-    ve_handle_pending_normal_registrations($event_id, $billing);
+    ve_handle_pending_normal_registrations($event_id, $billing, 'pending');
+}
+
+// ====================== EFT CHECKOUT (no gateway) ======================
+add_action('wp_ajax_ve_save_eft_registrations', 've_handle_eft_registrations');
+add_action('wp_ajax_nopriv_ve_save_eft_registrations', 've_handle_eft_registrations');
+
+/**
+ * EFT shortcode checkout: same validation as card forms, but status=eft,
+ * no gateway, tickets + draft/Sent unpaid Zoho invoice immediately.
+ */
+function ve_handle_eft_registrations() {
+    if (!wp_verify_nonce($_POST['nonce'] ?? '', 've_eft_nonce')) {
+        wp_send_json_error(['message' => 'Security check failed.']);
+    }
+
+    $event_id = absint($_POST['event_id'] ?? 0);
+    $mode     = sanitize_text_field(wp_unslash($_POST['mode'] ?? 'normal'));
+    if ($mode !== 'special') {
+        $mode = 'normal';
+    }
+
+    if (!$event_id || get_post_type($event_id) !== 've_event') {
+        wp_send_json_error(['message' => 'Invalid event.']);
+    }
+
+    $billing = ve_collect_billing_from_request();
+    if ($billing['billing_address'] === '' || $billing['accounting_email'] === '' || $billing['billing_country'] === '') {
+        wp_send_json_error(['message' => 'Please complete billing details.']);
+    }
+
+    if ($mode === 'special') {
+        ve_handle_pending_special_registrations($event_id, $billing, 'eft');
+        return;
+    }
+
+    ve_handle_pending_normal_registrations($event_id, $billing, 'eft');
 }
 
 // ====================== COMPLIMENTARY TICKETS (admin only) ======================
@@ -651,10 +732,14 @@ function ve_insert_complimentary_batch(array $rows) {
 /**
  * Normal shortcode checkout: person tickets only.
  *
- * @param int   $event_id
- * @param array $billing
+ * @param int    $event_id
+ * @param array  $billing
+ * @param string $row_status pending (card checkout) or eft (EFT shortcode)
  */
-function ve_handle_pending_normal_registrations($event_id, array $billing) {
+function ve_handle_pending_normal_registrations($event_id, array $billing, $row_status = 'pending') {
+    if (!in_array($row_status, ['pending', 'eft'], true)) {
+        $row_status = 'pending';
+    }
     $tickets = $_POST['tickets'] ?? [];
     if (empty($tickets) || !is_array($tickets)) {
         wp_send_json_error(['message' => 'Invalid data received.']);
@@ -698,7 +783,7 @@ function ve_handle_pending_normal_registrations($event_id, array $billing) {
             'line_type'         => 'person',
             'included_free'     => 0,
             'special_tier_key'  => '',
-            'status'            => 'pending',
+            'status'            => $row_status,
             'created_at'        => current_time('mysql'),
         ]);
     }
@@ -707,16 +792,25 @@ function ve_handle_pending_normal_registrations($event_id, array $billing) {
         wp_send_json_error(['message' => 'Invalid data received.']);
     }
 
+    if ($row_status === 'eft') {
+        ve_insert_eft_batch($rows);
+        return;
+    }
+
     ve_insert_pending_batch($rows);
 }
 
 /**
  * Special shortcode checkout: one package + free people + optional paid extras.
  *
- * @param int   $event_id
- * @param array $billing
+ * @param int    $event_id
+ * @param array  $billing
+ * @param string $row_status pending (card checkout) or eft (EFT shortcode)
  */
-function ve_handle_pending_special_registrations($event_id, array $billing) {
+function ve_handle_pending_special_registrations($event_id, array $billing, $row_status = 'pending') {
+    if (!in_array($row_status, ['pending', 'eft'], true)) {
+        $row_status = 'pending';
+    }
     if (trim((string) ($billing['billing_company'] ?? '')) === '') {
         wp_send_json_error(['message' => 'Please enter a company / organisation name.']);
     }
@@ -727,7 +821,7 @@ function ve_handle_pending_special_registrations($event_id, array $billing) {
         wp_send_json_error(['message' => 'Please select a valid package.']);
     }
 
-    // Stock gate: paid + pending package rows count against amount available
+    // Stock gate: paid + pending + EFT package rows count against amount available
     if (!ve_special_tier_has_stock($event_id, $special_key, $package)) {
         wp_send_json_error([
             'message' => sprintf(
@@ -780,7 +874,7 @@ function ve_handle_pending_special_registrations($event_id, array $billing) {
         'line_type'         => 'package',
         'included_free'     => 0,
         'special_tier_key'  => $special_key,
-        'status'            => 'pending',
+        'status'            => $row_status,
         'created_at'        => current_time('mysql'),
     ]);
 
@@ -812,7 +906,7 @@ function ve_handle_pending_special_registrations($event_id, array $billing) {
             'line_type'         => 'person',
             'included_free'     => 1,
             'special_tier_key'  => $special_key,
-            'status'            => 'pending',
+            'status'            => $row_status,
             'created_at'        => current_time('mysql'),
         ]);
     }
@@ -856,9 +950,14 @@ function ve_handle_pending_special_registrations($event_id, array $billing) {
             'line_type'         => 'person',
             'included_free'     => 0,
             'special_tier_key'  => $special_key,
-            'status'            => 'pending',
+            'status'            => $row_status,
             'created_at'        => current_time('mysql'),
         ]);
+    }
+
+    if ($row_status === 'eft') {
+        ve_insert_eft_batch($payment_placeholder_rows);
+        return;
     }
 
     ve_insert_pending_batch($payment_placeholder_rows);
@@ -907,6 +1006,171 @@ function ve_insert_pending_batch(array $rows) {
     ]);
 }
 
+/**
+ * Insert EFT rows (status=eft, no paid_at), then issue tickets + Zoho draft invoice.
+ *
+ * @param array<int,array<string,mixed>> $rows
+ */
+function ve_insert_eft_batch(array $rows) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 've_registrations';
+
+    $payment_reference = ve_generate_payment_reference();
+    $total_amount      = 0.0;
+    $inserted          = 0;
+
+    foreach ($rows as $row) {
+        $row['payment_reference']  = $payment_reference;
+        $row['internal_reference'] = $payment_reference;
+        $row['status']             = 'eft';
+        unset($row['paid_at']);
+        $total_amount             += (float) ($row['price'] ?? 0);
+
+        $ok = $wpdb->insert($table_name, $row);
+        if ($ok) {
+            $inserted++;
+        } else {
+            error_log('Venture Events: EFT insert failed: ' . $wpdb->last_error . ' | data=' . wp_json_encode($row));
+        }
+    }
+
+    if ($inserted === 0) {
+        wp_send_json_error(['message' => 'Failed to save any registrations.']);
+    }
+
+    if ($inserted < count($rows)) {
+        error_log(
+            "Venture Events: Partial EFT insert for {$payment_reference}: {$inserted}/" . count($rows)
+        );
+    }
+
+    $fulfill = ve_fulfill_eft_order($payment_reference);
+
+    $message = 'Order received. Tickets have been emailed to each guest. '
+        . 'The invoice has been emailed to the billing address. Please pay by EFT within 30 days.';
+    if (empty($fulfill['invoice_ok'])) {
+        $message = 'Order received. Tickets have been emailed to each guest. '
+            . 'The invoice could not be created automatically — the organiser will follow up.';
+    }
+
+    wp_send_json_success([
+        'payment_reference' => $payment_reference,
+        'total_amount'      => $total_amount,
+        'eft'               => true,
+        'invoice_ok'        => !empty($fulfill['invoice_ok']),
+        'emailed'           => (int) ($fulfill['emailed'] ?? 0),
+        'message'           => $message,
+    ]);
+}
+
+/**
+ * Issue QR tickets and create a Zoho EFT invoice (Sent, unpaid, Net 30).
+ *
+ * @param string $payment_reference
+ * @return array{emailed:int,invoice_ok:bool}
+ */
+function ve_fulfill_eft_order($payment_reference) {
+    $payment_reference = sanitize_text_field((string) $payment_reference);
+    $result = [
+        'emailed'    => 0,
+        'invoice_ok' => false,
+    ];
+
+    if ($payment_reference === '') {
+        return $result;
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 've_registrations';
+    $regs       = ve_get_eft_registrations_by_reference($payment_reference);
+    if (empty($regs)) {
+        error_log("Venture Events: EFT fulfill — no eft rows for ref={$payment_reference}");
+        return $result;
+    }
+
+    foreach ($regs as $reg) {
+        if (ve_is_package_registration($reg)) {
+            continue;
+        }
+
+        if (empty($reg->tier_name) || preg_match('/^new\d+$/i', (string) $reg->tier_name)) {
+            $resolved = ve_get_tier_name((int) $reg->event_id, (string) $reg->tier, $reg->tier_name ?? null);
+            if ($resolved && $resolved !== $reg->tier) {
+                $wpdb->update(
+                    $table_name,
+                    ['tier_name' => $resolved],
+                    ['id' => (int) $reg->id],
+                    ['%s'],
+                    ['%d']
+                );
+                $reg->tier_name = $resolved;
+            }
+        }
+
+        if (!ve_ensure_registration_qr($reg)) {
+            error_log("Venture Events: EFT QR generation FAILED for registration #{$reg->id}");
+            continue;
+        }
+
+        if (empty($reg->qr_url)) {
+            error_log(
+                "Venture Events: CRITICAL — skipping EFT ticket email for registration #{$reg->id} "
+                . "({$reg->email}): QR still missing"
+            );
+            continue;
+        }
+
+        if (ve_send_ticket_email($reg, (int) $reg->event_id, ve_registration_tier_label($reg))) {
+            $result['emailed']++;
+        }
+    }
+
+    error_log(
+        "Venture Events: EFT ticket email pass finished for ref={$payment_reference} "
+        . "(emailed={$result['emailed']})"
+    );
+
+    $existing_invoice = '';
+    foreach ($regs as $pr) {
+        $inv = trim((string) ($pr->invoice_number ?? ''));
+        if ($inv !== '') {
+            $existing_invoice = $inv;
+            break;
+        }
+    }
+    if ($existing_invoice !== '') {
+        error_log(
+            "Venture Events: SKIPPING Zoho EFT invoice for ref={$payment_reference} — "
+            . "already linked to invoice #{$existing_invoice}"
+        );
+        $result['invoice_ok'] = true;
+        return $result;
+    }
+
+    $fresh = ve_get_eft_registrations_by_reference($payment_reference);
+    if (empty($fresh)) {
+        return $result;
+    }
+
+    $master_reg = $fresh[0];
+    $master_reg->line_items = $fresh;
+
+    $invoice = ve_generate_zoho_invoice($master_reg, (int) $fresh[0]->event_id, null, 'eft');
+
+    if ($invoice && !empty($invoice['invoice_number'])) {
+        $invoice_number = $invoice['invoice_number'];
+        foreach ($fresh as $reg) {
+            $wpdb->update($table_name, ['invoice_number' => $invoice_number], ['id' => $reg->id]);
+        }
+        error_log("Venture Events: Zoho EFT invoice #{$invoice_number} linked to ref={$payment_reference}");
+        $result['invoice_ok'] = true;
+    } else {
+        error_log("Venture Events: Zoho EFT invoice generation failed for ref={$payment_reference}");
+    }
+
+    return $result;
+}
+
 // ====================== PENDING CLEANUP (24h TTL) ======================
 
 /**
@@ -929,7 +1193,7 @@ function ve_unschedule_pending_cleanup() {
 
 /**
  * Delete unpaid pending rows older than VE_PENDING_TTL_HOURS (default 24).
- * Paid and complimentary tickets are never touched.
+ * Paid, complimentary, and EFT tickets are never touched.
  *
  * @return int Number of rows deleted
  */
@@ -945,7 +1209,7 @@ function ve_cleanup_expired_pending_registrations() {
     // created_at is stored in blog-local time (current_time('mysql'))
     $cutoff = date('Y-m-d H:i:s', current_time('timestamp') - ($hours * HOUR_IN_SECONDS));
 
-    // Only pending abandoned checkouts — never paid / complimentary
+    // Only pending abandoned checkouts — never paid / complimentary / eft
     $deleted = $wpdb->query(
         $wpdb->prepare(
             "DELETE FROM {$table} WHERE status = %s AND created_at < %s",
@@ -1222,6 +1486,61 @@ function ve_payment_reference_fully_paid($payment_reference) {
     ));
 
     return $paid === $total;
+}
+
+/**
+ * Registrations for a payment ref that are EFT-issued (status=eft).
+ *
+ * @param string $payment_reference
+ * @return array<int,object>
+ */
+function ve_get_eft_registrations_by_reference($payment_reference) {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+    $payment_reference = sanitize_text_field((string) $payment_reference);
+    if ($payment_reference === '') {
+        return [];
+    }
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table
+         WHERE payment_reference = %s
+           AND status = 'eft'
+         ORDER BY id ASC",
+        $payment_reference
+    ));
+    return is_array($rows) ? $rows : [];
+}
+
+/**
+ * Whether every registration for a payment ref is status=eft.
+ *
+ * @param string $payment_reference
+ * @return bool
+ */
+function ve_payment_reference_fully_eft($payment_reference) {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+    $payment_reference = sanitize_text_field((string) $payment_reference);
+    if ($payment_reference === '') {
+        return false;
+    }
+
+    $total = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE payment_reference = %s",
+        $payment_reference
+    ));
+    if ($total < 1) {
+        return false;
+    }
+
+    $eft = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table
+         WHERE payment_reference = %s
+           AND status = 'eft'",
+        $payment_reference
+    ));
+
+    return $eft === $total;
 }
 
 /**
@@ -1759,7 +2078,7 @@ function ve_gate_process_check_in($event_id, $reg_id, $token) {
     }
 
     $status = (string) ($reg->status ?? '');
-    if ($status !== 'paid') {
+    if (!ve_registration_status_allows_entry($status)) {
         return [
             'ok'       => false,
             'code'     => 'not_paid',

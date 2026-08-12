@@ -116,6 +116,15 @@
             || ($('#ve-registration-form').data('mode') === 'complimentary');
     }
 
+    function isEftMode() {
+        return (window.vePaymentMode === 'eft')
+            || ($('#ve-payment-mode').val() === 'eft');
+    }
+
+    function checkoutButtonLabel() {
+        return isEftMode() ? 'Complete order' : 'Proceed to Payment';
+    }
+
     function personFieldsHTML() {
         return `
             <p><label>First Name <span class="ve-required">*</span></label><br>
@@ -544,9 +553,8 @@
         $('#vat-breakdown').html(html);
     }
 
-    function showCompResult(message, isError) {
-        const $box = $('#ve-comp-result');
-        if (!$box.length) {
+    function showResultBox($box, message, isError) {
+        if (!$box || !$box.length) {
             return;
         }
         $box
@@ -556,12 +564,46 @@
             .text(message);
     }
 
-    function clearCompResult() {
-        const $box = $('#ve-comp-result');
-        if (!$box.length) {
+    function showCompResult(message, isError) {
+        showResultBox($('#ve-comp-result'), message, isError);
+    }
+
+    function showEftResult(message, isError) {
+        showResultBox($('#ve-eft-result'), message, isError);
+        const el = document.getElementById('ve-eft-result');
+        if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }
+
+    function clearResultBox($box) {
+        if (!$box || !$box.length) {
             return;
         }
         $box.prop('hidden', true).removeClass('ve-comp-result--error ve-comp-result--ok').empty();
+    }
+
+    function clearCompResult() {
+        clearResultBox($('#ve-comp-result'));
+    }
+
+    function clearEftResult() {
+        clearResultBox($('#ve-eft-result'));
+    }
+
+    function resetEftForm() {
+        if (isSpecialMode()) {
+            $('#ve-special-tier-select').val('');
+            showSpecialBody(false);
+            updatePackageStockHint(null);
+        } else {
+            $('#tickets-container').empty();
+            ticketCount = 0;
+            addTicket(window.veTierOptions || '', { asExtra: false });
+        }
+        validateCheckoutButton();
+        updatePriceAndBreakdown();
+        setAddTicketButtonState();
     }
 
     function resetComplimentaryForm() {
@@ -627,25 +669,47 @@
     }
 
     function postCheckout(formData, $btn) {
-        const ajaxUrl = (window.veGateway && veGateway.ajax_url)
-            ? window.veGateway.ajax_url
-            : '/wp-admin/admin-ajax.php';
+        const eft = isEftMode();
+        const ajaxUrl = eft
+            ? ((window.veEft && veEft.ajax_url) || (window.veGateway && veGateway.ajax_url) || '/wp-admin/admin-ajax.php')
+            : ((window.veGateway && veGateway.ajax_url) ? window.veGateway.ajax_url : '/wp-admin/admin-ajax.php');
 
         $.post(ajaxUrl, formData)
             .done(function (response) {
+                if (eft) {
+                    if (response.success) {
+                        const msg = (response.data && response.data.message)
+                            ? response.data.message
+                            : 'Order received. Please check your email.';
+                        showEftResult(msg, false);
+                        $btn.prop('disabled', false).text(checkoutButtonLabel());
+                        resetEftForm();
+                    } else {
+                        const err = (response.data && response.data.message) || 'Unknown error';
+                        showEftResult(err, true);
+                        $btn.prop('disabled', false).text(checkoutButtonLabel());
+                        validateCheckoutButton();
+                    }
+                    return;
+                }
+
                 if (response.success && response.data.payment_reference) {
                     $btn.text('✅ Registrations saved – redirecting to payment...');
                     const ref = response.data.payment_reference;
                     window.location.href = window.location.pathname + '?ve_payment=start&ref=' + encodeURIComponent(ref);
                 } else {
                     alert('❌ ' + ((response.data && response.data.message) || 'Unknown error'));
-                    $btn.prop('disabled', false).text('Proceed to Payment');
+                    $btn.prop('disabled', false).text(checkoutButtonLabel());
                     validateCheckoutButton();
                 }
             })
             .fail(function () {
-                alert('Network error – please try again.');
-                $btn.prop('disabled', false).text('Proceed to Payment');
+                if (eft) {
+                    showEftResult('Network error – please try again.', true);
+                } else {
+                    alert('Network error – please try again.');
+                }
+                $btn.prop('disabled', false).text(checkoutButtonLabel());
                 validateCheckoutButton();
             });
     }
@@ -659,7 +723,8 @@
         const complimentary = isComplimentaryMode();
         console.log(
             '✅ Venture Events registration form initialized',
-            complimentary ? '(complimentary)' : (special ? '(special)' : '(normal)')
+            complimentary ? '(complimentary)' : (special ? '(special)' : '(normal)'),
+            isEftMode() ? '(eft)' : ''
         );
 
         const tierOptions = window.veTierOptions || '';
@@ -744,11 +809,18 @@
                 return;
             }
 
-            $btn.prop('disabled', true).text('Saving registrations...');
+            if (isEftMode()) {
+                clearEftResult();
+            }
 
+            $btn.prop('disabled', true).text(isEftMode() ? 'Submitting order...' : 'Saving registrations...');
+
+            const eft = isEftMode();
             const base = {
-                action: 've_save_pending_registrations',
-                nonce: (window.veGateway && veGateway.nonce) || '',
+                action: eft ? 've_save_eft_registrations' : 've_save_pending_registrations',
+                nonce: eft
+                    ? ((window.veEft && veEft.nonce) || '')
+                    : ((window.veGateway && veGateway.nonce) || ''),
                 event_id: $('#ve-event-id').val(),
                 billing_company: ($('#billing_company').val() || '').trim(),
                 billing_address: ($('#billing_address').val() || '').trim(),
@@ -761,14 +833,14 @@
                 const pkg = getSelectedPackage();
                 if (!pkg) {
                     alert('Please select a package that is still available.');
-                    $btn.prop('disabled', false).text('Proceed to Payment');
+                    $btn.prop('disabled', false).text(checkoutButtonLabel());
                     validateCheckoutButton();
                     return;
                 }
                 if (pkg.sold_out || (pkg.remaining !== null && pkg.remaining !== undefined
                     && pkg.remaining !== '' && parseInt(pkg.remaining, 10) < 1)) {
                     alert('Sorry, that package is sold out. Please choose another.');
-                    $btn.prop('disabled', false).text('Proceed to Payment');
+                    $btn.prop('disabled', false).text(checkoutButtonLabel());
                     validateCheckoutButton();
                     return;
                 }
