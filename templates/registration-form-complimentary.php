@@ -11,6 +11,27 @@ $event_title = get_the_title($event_id);
 $can_issue   = function_exists('ve_user_can_issue_complimentary') && ve_user_can_issue_complimentary();
 $logged_in   = is_user_logged_in();
 $issuer      = $can_issue ? ve_complimentary_issuer_label() : '';
+$comp_tiers  = function_exists('ve_get_complimentary_tiers')
+    ? ve_get_complimentary_tiers($event_id)
+    : [];
+
+$tier_options_html = '<option value="">— Select a tier —</option>';
+$comp_js           = [];
+foreach ($comp_tiers as $key => $tier) {
+    if (!is_array($tier)) {
+        continue;
+    }
+    $name = trim((string) ($tier['name'] ?? ''));
+    if ($name === '') {
+        continue;
+    }
+    $tier_options_html .= sprintf(
+        '<option value="%s">%s</option>',
+        esc_attr((string) $key),
+        esc_html($name)
+    );
+    $comp_js[(string) $key] = ['name' => $name];
+}
 ?>
 
 <div class="venture-events-registration ve-complimentary-form">
@@ -21,9 +42,11 @@ $issuer      = $can_issue ? ve_complimentary_issuer_label() : '';
         <p><a class="ve-btn ve-btn-primary" href="<?php echo esc_url(wp_login_url(get_permalink())); ?>">Log in</a></p>
     <?php elseif (!$can_issue): ?>
         <p class="ve-error">Only administrators can issue complimentary tickets.</p>
+    <?php elseif (empty($comp_js)): ?>
+        <p class="ve-error">This event has no complimentary ticket tiers configured.</p>
     <?php else: ?>
         <p class="ve-comp-meta">
-            Tier: <strong>Complimentary Pass</strong> (N$ 0.00)
+            N$ 0.00
             <?php if ($issuer !== ''): ?>
                 · Issued as <strong><?php echo esc_html($issuer); ?></strong>
             <?php endif; ?>
@@ -34,6 +57,15 @@ $issuer      = $can_issue ? ve_complimentary_issuer_label() : '';
         <form id="ve-registration-form" data-mode="complimentary">
             <input type="hidden" id="ve-event-id" value="<?php echo esc_attr($event_id); ?>">
             <input type="hidden" id="ve-form-mode" value="complimentary">
+
+            <div class="ve-comp-tier-section">
+                <p>
+                    <label for="ve-comp-tier-select">Tier <span class="ve-required">*</span></label><br>
+                    <select id="ve-comp-tier-select" required>
+                        <?php echo $tier_options_html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — built with esc_* above ?>
+                    </select>
+                </p>
+            </div>
 
             <div id="tickets-container"></div>
 
@@ -54,10 +86,11 @@ $issuer      = $can_issue ? ve_complimentary_issuer_label() : '';
     <?php endif; ?>
 </div>
 
-<?php if ($can_issue): ?>
+<?php if ($can_issue && !empty($comp_js)): ?>
 <script>
     window.veRegistrationMode = 'complimentary';
     window.veTierOptions = '';
+    window.veComplimentaryTiers = <?php echo wp_json_encode($comp_js); ?>;
     if (!window.veComplimentary || !window.veComplimentary.nonce) {
         window.veComplimentary = {
             ajax_url: <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>,

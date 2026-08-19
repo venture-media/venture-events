@@ -116,6 +116,10 @@ foreach ($special_tiers as $key => $tier) {
         // null = unlimited; 0 = sold out
         'remaining'       => $remaining,
         'sold_out'        => ($remaining !== null && $remaining < 1),
+        'industries'      => function_exists('ve_parse_industry_lines')
+            ? ve_parse_industry_lines($tier['industries'] ?? [])
+            : [],
+        'industry_other'  => !empty($tier['industry_other']),
     ];
 }
 ?>
@@ -147,6 +151,19 @@ foreach ($special_tiers as $key => $tier) {
                 <p class="ve-hint ve-package-hint">Select a package to continue. Included free tickets (if any) and optional extra tickets will appear below.</p>
             <?php endif; ?>
             <p id="ve-package-stock-hint" class="ve-hint" hidden></p>
+
+            <div id="ve-industry-wrap" hidden>
+                <p>
+                    <label for="ve-industry-select">Industry <span class="ve-required">*</span></label><br>
+                    <select id="ve-industry-select">
+                        <option value="">— Select industry —</option>
+                    </select>
+                </p>
+                <p id="ve-industry-other-wrap" hidden>
+                    <label for="ve-industry-other">Please specify <span class="ve-required">*</span></label><br>
+                    <input type="text" id="ve-industry-other" maxlength="200" autocomplete="off">
+                </p>
+            </div>
         </div>
 
         <div id="ve-special-body" class="ve-special-body" hidden>

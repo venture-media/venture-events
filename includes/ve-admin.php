@@ -279,6 +279,10 @@ function ve_special_tiers_meta_box_html($post) {
                 ? ve_count_special_tier_sold((int) $post->ID, (string) $key)
                 : 0;
             $remaining     = ($available > 0) ? max(0, $available - $sold) : null;
+            $industries    = function_exists('ve_parse_industry_lines')
+                ? ve_parse_industry_lines($tier['industries'] ?? [])
+                : [];
+            $allow_other   = !empty($tier['industry_other']);
             ?>
             <div class="ve-special-tier-row" style="border:1px solid #ddd; padding:12px; margin-bottom:10px; background:#fafafa;">
                 <p style="margin:0 0 8px;">
@@ -314,7 +318,7 @@ function ve_special_tiers_meta_box_html($post) {
                     </label>
                     <button type="button" class="button ve-remove-special-tier">Remove</button>
                 </p>
-                <p class="description" style="margin:0;">
+                <p class="description" style="margin:0 0 8px;">
                     If free tickets is 0, the free ticket tier is not used.
                     <?php if ($available > 0): ?>
                         · Sold / held: <strong><?php echo (int) $sold; ?></strong>
@@ -328,6 +332,21 @@ function ve_special_tiers_meta_box_html($post) {
                             (<?php echo (int) $sold; ?> sold / held so far)
                         <?php endif; ?>
                     <?php endif; ?>
+                </p>
+                <p style="margin:0 0 6px;">
+                    <label>Industry options<br>
+                        <textarea name="ve_special_tiers[<?php echo esc_attr($key); ?>][industries]"
+                                  rows="8" style="width:100%; max-width:520px;"
+                                  placeholder="One industry per line"><?php echo esc_textarea(implode("\n", $industries)); ?></textarea>
+                    </label>
+                </p>
+                <p style="margin:0;" class="description">One industry per line. These become the dropdown on the special registration form (required when any are set).</p>
+                <p style="margin:6px 0 0;">
+                    <label>
+                        <input type="checkbox" name="ve_special_tiers[<?php echo esc_attr($key); ?>][industry_other]" value="1" <?php checked($allow_other); ?>>
+                        Other option
+                    </label>
+                    <span class="description">Adds “Other” to the dropdown and a text field when selected.</span>
                 </p>
             </div>
         <?php endforeach; ?>
@@ -365,7 +384,22 @@ function ve_special_tiers_meta_box_html($post) {
                 </label>
                 <button type="button" class="button ve-remove-special-tier">Remove</button>
             </p>
-            <p class="description" style="margin:0;">If free tickets is 0, the free ticket tier is not used. Amount available: 0 = unlimited.</p>
+            <p class="description" style="margin:0 0 8px;">If free tickets is 0, the free ticket tier is not used. Amount available: 0 = unlimited.</p>
+            <p style="margin:0 0 6px;">
+                <label>Industry options<br>
+                    <textarea name="ve_special_tiers[__KEY__][industries]"
+                              rows="8" style="width:100%; max-width:520px;"
+                              placeholder="One industry per line"></textarea>
+                </label>
+            </p>
+            <p style="margin:0;" class="description">One industry per line. These become the dropdown on the special registration form (required when any are set).</p>
+            <p style="margin:6px 0 0;">
+                <label>
+                    <input type="checkbox" name="ve_special_tiers[__KEY__][industry_other]" value="1">
+                    Other option
+                </label>
+                <span class="description">Adds “Other” to the dropdown and a text field when selected.</span>
+            </p>
         </div>
     </script>
 
@@ -452,17 +486,141 @@ function ve_save_special_tiers_meta($post_id) {
                 $key = $slug;
             }
 
+            $industries = function_exists('ve_parse_industry_lines')
+                ? ve_parse_industry_lines($tier['industries'] ?? '')
+                : [];
+            $allow_other = !empty($tier['industry_other']);
+
             $special[$key] = [
-                'name'          => $name,
-                'price'         => $price,
-                'available'     => $available,
-                'free_tickets'  => $free_tickets,
-                'free_tier_key' => $free_tier,
+                'name'           => $name,
+                'price'          => $price,
+                'available'      => $available,
+                'free_tickets'   => $free_tickets,
+                'free_tier_key'  => $free_tier,
+                'industries'     => $industries,
+                'industry_other' => $allow_other,
             ];
         }
     }
 
     update_post_meta($post_id, '_ve_special_tiers', $special);
+}
+
+// ====================== COMPLIMENTARY TICKET TIERS META BOX ======================
+add_action('add_meta_boxes', 've_add_complimentary_tiers_meta_box');
+function ve_add_complimentary_tiers_meta_box() {
+    add_meta_box(
+        've_complimentary_tiers_meta',
+        'Complimentary ticket tiers',
+        've_complimentary_tiers_meta_box_html',
+        've_event',
+        'normal',
+        'high'
+    );
+}
+
+function ve_complimentary_tiers_meta_box_html($post) {
+    $tiers = get_post_meta($post->ID, '_ve_complimentary_tiers', true) ?: [];
+    if (!is_array($tiers)) {
+        $tiers = [];
+    }
+
+    wp_nonce_field('ve_save_complimentary_tiers', 've_complimentary_tiers_nonce');
+    ?>
+    <p class="description" style="margin-bottom:12px;">
+        Names appear exactly as entered on the complimentary form (no prefix is added).
+        Examples: <em>Delegate Pass</em>, <em>Party Pass</em>, <em>Agents Pass</em>.
+        Use shortcode <code>[venture_complimentary event_id="<?php echo (int) $post->ID; ?>"]</code>
+        (administrators only).
+    </p>
+
+    <div id="ve-complimentary-tiers-wrapper">
+        <?php foreach ($tiers as $key => $tier): ?>
+            <?php $name = esc_attr($tier['name'] ?? ''); ?>
+            <div class="ve-complimentary-tier-row" style="border:1px solid #ddd; padding:10px; margin-bottom:10px;">
+                <input type="text" name="ve_complimentary_tiers[<?php echo esc_attr($key); ?>][name]"
+                       value="<?php echo $name; ?>" style="width:50%; max-width:420px;"
+                       placeholder="e.g. Delegate Pass, Agents Pass">
+                <button type="button" class="button ve-remove-complimentary-tier">Remove</button>
+            </div>
+        <?php endforeach; ?>
+    </div>
+
+    <button type="button" id="ve-add-complimentary-tier" class="button">+ Add Complimentary Tier</button>
+
+    <script>
+    jQuery(document).ready(function($) {
+        let count = Date.now();
+        $('#ve-add-complimentary-tier').on('click', function() {
+            count++;
+            const html = `
+                <div class="ve-complimentary-tier-row" style="border:1px solid #ddd; padding:10px; margin-bottom:10px;">
+                    <input type="text" name="ve_complimentary_tiers[new${count}][name]" value=""
+                           style="width:50%; max-width:420px;" placeholder="e.g. Delegate Pass, Agents Pass">
+                    <button type="button" class="button ve-remove-complimentary-tier">Remove</button>
+                </div>`;
+            $('#ve-complimentary-tiers-wrapper').append(html);
+        });
+        $(document).on('click', '.ve-remove-complimentary-tier', function() {
+            $(this).closest('.ve-complimentary-tier-row').remove();
+        });
+    });
+    </script>
+    <?php
+}
+
+add_action('save_post_ve_event', 've_save_complimentary_tiers_meta', 25);
+function ve_save_complimentary_tiers_meta($post_id) {
+    if (!isset($_POST['ve_complimentary_tiers_nonce']) || !wp_verify_nonce($_POST['ve_complimentary_tiers_nonce'], 've_save_complimentary_tiers')) {
+        return;
+    }
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+        return;
+    }
+    if (!current_user_can('edit_post', $post_id)) {
+        return;
+    }
+
+    $previous = get_post_meta($post_id, '_ve_complimentary_tiers', true);
+    if (!is_array($previous)) {
+        $previous = [];
+    }
+
+    $tiers = [];
+    if (isset($_POST['ve_complimentary_tiers']) && is_array($_POST['ve_complimentary_tiers'])) {
+        foreach ($_POST['ve_complimentary_tiers'] as $key => $tier) {
+            if (!is_array($tier)) {
+                continue;
+            }
+            $name = sanitize_text_field($tier['name'] ?? '');
+            if ($name === '') {
+                continue;
+            }
+
+            $key           = (string) $key;
+            $is_temp_new   = ($key === '' || preg_match('/^new\d+$/i', $key));
+            $already_saved = array_key_exists($key, $previous);
+            if ($is_temp_new && !$already_saved) {
+                $base = sanitize_title($name);
+                if ($base === '') {
+                    $base = 'comp-tier';
+                }
+                $slug = $base;
+                $i    = 2;
+                while (isset($tiers[$slug])) {
+                    $slug = $base . '-' . $i;
+                    $i++;
+                }
+                $key = $slug;
+            }
+
+            $tiers[$key] = [
+                'name' => $name,
+            ];
+        }
+    }
+
+    update_post_meta($post_id, '_ve_complimentary_tiers', $tiers);
 }
 
 // ====================== DANGER: CLEAR ALL TICKETS META BOX ======================
@@ -765,6 +923,10 @@ function ve_guest_list_page() {
             <?php $table->search_box('Search by name or email', 'search'); ?>
         </form>
 
+        <p>
+            <a class="button" href="<?php echo esc_url(ve_list_export_url('ve_export_guest_list', $event_id)); ?>">Export CSV</a>
+        </p>
+
         <?php $table->display(); ?>
     </div>
     <?php
@@ -814,9 +976,269 @@ function ve_special_list_page() {
             <?php $table->search_box('Search packages', 'search'); ?>
         </form>
 
+        <p>
+            <a class="button" href="<?php echo esc_url(ve_list_export_url('ve_export_special_list', $event_id)); ?>">Export CSV</a>
+        </p>
+
         <?php $table->display(); ?>
     </div>
     <?php
+}
+
+/**
+ * Nonced admin-post URL for a list CSV, preserving the current event + search.
+ *
+ * @param string $action
+ * @param int    $event_id
+ * @return string
+ */
+function ve_list_export_url($action, $event_id) {
+    $search = isset($_REQUEST['s']) ? sanitize_text_field(wp_unslash($_REQUEST['s'])) : '';
+    $args   = [
+        'action'   => $action,
+        'event_id' => (int) $event_id,
+    ];
+    if ($search !== '') {
+        $args['s'] = $search;
+    }
+    return wp_nonce_url(add_query_arg($args, admin_url('admin-post.php')), $action);
+}
+
+/**
+ * Stream a UTF-8 CSV download and exit.
+ *
+ * @param string               $filename
+ * @param array<int,string>    $headers
+ * @param array<int,array<int,string|int|float>> $rows
+ */
+function ve_send_csv_download($filename, array $headers, array $rows) {
+    nocache_headers();
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('X-Content-Type-Options: nosniff');
+
+    $out = fopen('php://output', 'w');
+    if ($out === false) {
+        wp_die('Could not write CSV.', 'Export failed', ['response' => 500]);
+    }
+
+    // BOM so Excel opens UTF-8 correctly
+    fwrite($out, "\xEF\xBB\xBF");
+    fputcsv($out, $headers);
+    foreach ($rows as $row) {
+        fputcsv($out, $row);
+    }
+    fclose($out);
+    exit;
+}
+
+/**
+ * @param int $event_id
+ * @return string
+ */
+function ve_export_filename($prefix, $event_id) {
+    $stamp = date('Ymd');
+    if ($event_id > 0) {
+        $slug = sanitize_title(get_the_title($event_id));
+        if ($slug === '') {
+            $slug = (string) $event_id;
+        }
+        return $prefix . '-' . $slug . '-' . $stamp . '.csv';
+    }
+    return $prefix . '-all-' . $stamp . '.csv';
+}
+
+add_action('admin_post_ve_export_guest_list', 've_handle_export_guest_list');
+function ve_handle_export_guest_list() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Sorry, you are not allowed to access this page.'));
+    }
+    check_admin_referer('ve_export_guest_list');
+
+    $event_id = isset($_REQUEST['event_id']) ? absint($_REQUEST['event_id']) : 0;
+    $search   = isset($_REQUEST['s']) ? sanitize_text_field(wp_unslash($_REQUEST['s'])) : '';
+    $items    = ve_query_guest_list_rows($event_id, $search);
+
+    $headers = [
+        'Full Name',
+        'Organisation',
+        'Phone',
+        'Email',
+        'Event',
+        'Tier',
+        'Price (N$)',
+        'Invoice #',
+        'Internal Ref',
+        'Status',
+        'Entered At',
+        'Registered On',
+    ];
+
+    $rows = [];
+    foreach ($items as $item) {
+        $tier = function_exists('ve_registration_tier_label')
+            ? ve_registration_tier_label($item)
+            : (string) ($item->tier ?? '');
+        if (!empty($item->included_free)) {
+            $tier .= ' (included)';
+        }
+
+        $status = function_exists('ve_registration_status_label')
+            ? ve_registration_status_label($item->status ?? 'pending')
+            : ucfirst((string) ($item->status ?? 'pending'));
+
+        $entered = '';
+        if (!empty($item->entered_at)) {
+            $entered = date('d M Y H:i', strtotime($item->entered_at));
+            if (!empty($item->entered_by) && function_exists('ve_gate_user_display_name')) {
+                $by = ve_gate_user_display_name((int) $item->entered_by);
+                if ($by !== '') {
+                    $entered .= ' · ' . $by;
+                }
+            }
+        }
+
+        $rows[] = [
+            trim(($item->first_name ?? '') . ' ' . ($item->last_name ?? '')),
+            $item->organisation ?: '',
+            $item->phone ?: '',
+            $item->email ?: '',
+            $item->event_title ?: '',
+            $tier,
+            number_format((float) ($item->price ?? 0), 2, '.', ''),
+            $item->invoice_number ?: '',
+            $item->internal_reference ?: '',
+            $status,
+            $entered,
+            !empty($item->created_at) ? date('d M Y H:i', strtotime($item->created_at)) : '',
+        ];
+    }
+
+    ve_send_csv_download(ve_export_filename('guest-list', $event_id), $headers, $rows);
+}
+
+add_action('admin_post_ve_export_special_list', 've_handle_export_special_list');
+function ve_handle_export_special_list() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Sorry, you are not allowed to access this page.'));
+    }
+    check_admin_referer('ve_export_special_list');
+
+    $event_id = isset($_REQUEST['event_id']) ? absint($_REQUEST['event_id']) : 0;
+    $search   = isset($_REQUEST['s']) ? sanitize_text_field(wp_unslash($_REQUEST['s'])) : '';
+    $items    = ve_query_special_list_rows($event_id, $search);
+
+    $headers = [
+        'Package',
+        'Organisation',
+        'Industry',
+        'Accounting Email',
+        'Event',
+        'Price (N$)',
+        'Invoice #',
+        'Internal Ref',
+        'Status',
+        'Registered On',
+    ];
+
+    $rows = [];
+    foreach ($items as $item) {
+        $package = function_exists('ve_registration_tier_label')
+            ? ve_registration_tier_label($item)
+            : (string) ($item->tier_name ?: $item->first_name ?: $item->tier);
+        $org     = $item->billing_company ?: $item->organisation ?: '';
+        $email   = $item->accounting_email ?: $item->email ?: '';
+        $event   = $item->event_title ? ($item->event_title . ' - Special') : '';
+        $status  = function_exists('ve_registration_status_label')
+            ? ve_registration_status_label($item->status ?? 'pending')
+            : ucfirst((string) ($item->status ?? 'pending'));
+        $industry = function_exists('ve_registration_industry_export_label')
+            ? ve_registration_industry_export_label($item)
+            : (string) ($item->industry ?? '');
+
+        $rows[] = [
+            $package,
+            $org,
+            $industry,
+            $email,
+            $event,
+            number_format((float) ($item->price ?? 0), 2, '.', ''),
+            $item->invoice_number ?: '',
+            $item->internal_reference ?: '',
+            $status,
+            !empty($item->created_at) ? date('d M Y H:i', strtotime($item->created_at)) : '',
+        ];
+    }
+
+    ve_send_csv_download(ve_export_filename('special-list', $event_id), $headers, $rows);
+}
+
+/**
+ * All guest-list people matching the current filter (no pagination).
+ *
+ * @param int    $event_id
+ * @param string $search
+ * @return array<int,object>
+ */
+function ve_query_guest_list_rows($event_id, $search = '') {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+
+    $where = ["(r.line_type IS NULL OR r.line_type = '' OR r.line_type = %s)"];
+    $args  = ['person'];
+
+    if ($event_id > 0) {
+        $where[] = 'r.event_id = %d';
+        $args[]  = $event_id;
+    }
+
+    if ($search !== '') {
+        $like    = '%' . $wpdb->esc_like($search) . '%';
+        $where[] = '(r.first_name LIKE %s OR r.last_name LIKE %s OR r.email LIKE %s OR r.organisation LIKE %s OR r.internal_reference LIKE %s OR r.status LIKE %s)';
+        $args    = array_merge($args, [$like, $like, $like, $like, $like, $like]);
+    }
+
+    $sql = "SELECT r.*, p.post_title AS event_title
+            FROM $table r
+            LEFT JOIN {$wpdb->posts} p ON r.event_id = p.ID
+            WHERE " . implode(' AND ', $where) . '
+            ORDER BY r.created_at DESC';
+
+    return $wpdb->get_results($wpdb->prepare($sql, $args)) ?: [];
+}
+
+/**
+ * All special-list packages matching the current filter (no pagination).
+ *
+ * @param int    $event_id
+ * @param string $search
+ * @return array<int,object>
+ */
+function ve_query_special_list_rows($event_id, $search = '') {
+    global $wpdb;
+    $table = $wpdb->prefix . 've_registrations';
+
+    $where = ['r.line_type = %s'];
+    $args  = ['package'];
+
+    if ($event_id > 0) {
+        $where[] = 'r.event_id = %d';
+        $args[]  = $event_id;
+    }
+
+    if ($search !== '') {
+        $like    = '%' . $wpdb->esc_like($search) . '%';
+        $where[] = '(r.tier_name LIKE %s OR r.first_name LIKE %s OR r.organisation LIKE %s OR r.billing_company LIKE %s OR r.accounting_email LIKE %s OR r.internal_reference LIKE %s OR r.status LIKE %s OR r.industry LIKE %s OR r.industry_other LIKE %s)';
+        $args    = array_merge($args, [$like, $like, $like, $like, $like, $like, $like, $like, $like]);
+    }
+
+    $sql = "SELECT r.*, p.post_title AS event_title
+            FROM $table r
+            LEFT JOIN {$wpdb->posts} p ON r.event_id = p.ID
+            WHERE " . implode(' AND ', $where) . '
+            ORDER BY r.created_at DESC';
+
+    return $wpdb->get_results($wpdb->prepare($sql, $args)) ?: [];
 }
 
 // ====================== ZOHO SETTINGS PAGE ======================

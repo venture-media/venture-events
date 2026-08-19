@@ -136,6 +136,18 @@
 	font-family: var(--ve-font);
 }
 
+.venture-events-registration.ve-complimentary-form .ve-comp-tier-section {
+	margin-bottom: 1.25em;
+	padding: 16px;
+	border: 1px solid var(--ve-border);
+	background: var(--ve-surface);
+}
+
+.venture-events-registration.ve-complimentary-form .ve-comp-tier-section select {
+	width: 100%;
+	max-width: 100%;
+}
+
 .venture-events-registration .ve-comp-meta {
 	text-align: center;
 	color: var(--ve-secondary);
@@ -395,6 +407,15 @@
 	padding: 16px;
 	border: 1px solid var(--ve-border);
 	background: var(--ve-surface);
+}
+
+.venture-events-registration.ve-registration-special #ve-industry-wrap {
+	margin-top: 0.75em;
+}
+
+.venture-events-registration.ve-registration-special #ve-industry-wrap[hidden],
+.venture-events-registration.ve-registration-special #ve-industry-other-wrap[hidden] {
+	display: none !important;
 }
 
 .venture-events-registration .ve-package-hint {

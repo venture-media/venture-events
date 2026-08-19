@@ -139,6 +139,29 @@
                <input type="email" class="email" required></p>`;
     }
 
+    function getSelectedComplimentaryTier() {
+        const key = $('#ve-comp-tier-select').val();
+        if (!key || !window.veComplimentaryTiers || !window.veComplimentaryTiers[key]) {
+            return null;
+        }
+        return Object.assign({ key: key }, window.veComplimentaryTiers[key]);
+    }
+
+    function complimentaryTierDisplayName() {
+        const tier = getSelectedComplimentaryTier();
+        return (tier && tier.name) ? String(tier.name) : '';
+    }
+
+    function complimentaryTierLabelHtml() {
+        const name = complimentaryTierDisplayName();
+        const label = name || 'Select a tier';
+        return '<strong>' + $('<div>').text(label).html() + '</strong> <span class="ve-hint">(N$ 0.00)</span>';
+    }
+
+    function updateComplimentaryTicketLabels() {
+        $('#tickets-container .ticket-accordion .ve-included-tier').html(complimentaryTierLabelHtml());
+    }
+
     function createComplimentaryTicketHTML(index) {
         const removeBtn = index > 0
             ? `<button type="button" class="remove-ticket-btn" aria-label="Remove ticket">×</button>`
@@ -151,7 +174,7 @@
                 ${removeBtn}
             </div>
             <div class="accordion-body">
-                <p class="ve-included-tier"><strong>Complimentary Pass</strong> <span class="ve-hint">(N$ 0.00)</span></p>
+                <p class="ve-included-tier">${complimentaryTierLabelHtml()}</p>
                 ${personFieldsHTML()}
             </div>
         </div>`;
@@ -254,6 +277,8 @@
             const pkg = getSelectedPackage();
             if (!pkg) {
                 isValid = false;
+            } else if (!getSelectedIndustry().valid) {
+                isValid = false;
             } else {
                 $('#free-tickets-container .ticket-accordion').each(function () {
                     if (!validatePersonBlock($(this), false)) {
@@ -272,16 +297,20 @@
                 }
             }
         } else if (complimentary) {
-            const $guests = $('#tickets-container .ticket-accordion');
-            if (!$guests.length) {
+            if (!getSelectedComplimentaryTier()) {
                 isValid = false;
             } else {
-                $guests.each(function () {
-                    if (!validatePersonBlock($(this), false)) {
-                        isValid = false;
-                        return false;
-                    }
-                });
+                const $guests = $('#tickets-container .ticket-accordion');
+                if (!$guests.length) {
+                    isValid = false;
+                } else {
+                    $guests.each(function () {
+                        if (!validatePersonBlock($(this), false)) {
+                            isValid = false;
+                            return false;
+                        }
+                    });
+                }
             }
         } else {
             const $paid = $('#tickets-container .ticket-accordion');
@@ -322,7 +351,7 @@
         const $btn = $('#ve-checkout-btn');
         const $wrap = $btn.closest('.ve-checkout-wrap');
         const disabledTip = complimentary
-            ? 'Complete guest details first'
+            ? (getSelectedComplimentaryTier() ? 'Complete guest details first' : 'Select a tier first')
             : 'Complete the form before proceeding';
 
         if (!$btn.length) {
@@ -430,6 +459,79 @@
         updatePriceAndBreakdown();
         validateCheckoutButton();
         setAddTicketButtonState();
+    }
+
+    function packageHasIndustry(pkg) {
+        if (!pkg) {
+            return false;
+        }
+        const opts = Array.isArray(pkg.industries) ? pkg.industries : [];
+        return opts.length > 0 || !!pkg.industry_other;
+    }
+
+    function syncIndustryField(pkg) {
+        const $wrap = $('#ve-industry-wrap');
+        const $select = $('#ve-industry-select');
+        const $otherWrap = $('#ve-industry-other-wrap');
+        const $other = $('#ve-industry-other');
+        if (!$wrap.length) {
+            return;
+        }
+
+        if (!packageHasIndustry(pkg)) {
+            $wrap.prop('hidden', true);
+            $select.empty().append('<option value="">— Select industry —</option>').val('');
+            $other.val('');
+            $otherWrap.prop('hidden', true);
+            return;
+        }
+
+        $wrap.prop('hidden', false);
+        $select.empty().append('<option value="">— Select industry —</option>');
+        (pkg.industries || []).forEach(function (name) {
+            if (!name) {
+                return;
+            }
+            $select.append($('<option></option>').val(name).text(name));
+        });
+        if (pkg.industry_other) {
+            $select.append($('<option></option>').val('__other__').text('Other'));
+        }
+        $select.val('');
+        $other.val('');
+        $otherWrap.prop('hidden', true);
+    }
+
+    function updateIndustryOtherVisibility() {
+        const show = $('#ve-industry-select').val() === '__other__';
+        const $otherWrap = $('#ve-industry-other-wrap');
+        $otherWrap.prop('hidden', !show);
+        if (!show) {
+            $('#ve-industry-other').val('');
+        }
+    }
+
+    function getSelectedIndustry() {
+        const pkg = getSelectedPackage();
+        if (!packageHasIndustry(pkg)) {
+            return { required: false, valid: true, industry: '', industry_other: '' };
+        }
+        const val = $('#ve-industry-select').val() || '';
+        if (!val) {
+            return { required: true, valid: false, industry: '', industry_other: '' };
+        }
+        if (val === '__other__') {
+            const other = ($('#ve-industry-other').val() || '').trim();
+            if (!other) {
+                return { required: true, valid: false, industry: 'Other', industry_other: '' };
+            }
+            return { required: true, valid: true, industry: '__other__', industry_other: other };
+        }
+        const opts = pkg.industries || [];
+        if (opts.indexOf(val) === -1) {
+            return { required: true, valid: false, industry: '', industry_other: '' };
+        }
+        return { required: true, valid: true, industry: val, industry_other: '' };
     }
 
     function getSelectedPackage() {
@@ -596,6 +698,7 @@
             $('#ve-special-tier-select').val('');
             showSpecialBody(false);
             updatePackageStockHint(null);
+            syncIndustryField(null);
         } else {
             $('#tickets-container').empty();
             ticketCount = 0;
@@ -738,6 +841,7 @@
                 if (!pkg) {
                     showSpecialBody(false);
                     updatePackageStockHint(null);
+                    syncIndustryField(null);
                     updatePriceAndBreakdown();
                     validateCheckoutButton();
                     return;
@@ -745,6 +849,7 @@
 
                 showSpecialBody(true);
                 updatePackageStockHint(pkg);
+                syncIndustryField(pkg);
                 renderFreeTickets(pkg);
                 // Do not auto-add extra paid tickets; package + free is enough
                 $('#tickets-container').empty();
@@ -774,8 +879,14 @@
 
         $(document).on(
             'input change',
-            '.first_name, .last_name, .email, .tier-select, #billing_company, #billing_address, #accounting_email, #billing_country, #ve-special-tier-select',
+            '.first_name, .last_name, .email, .tier-select, #billing_company, #billing_address, #accounting_email, #billing_country, #ve-special-tier-select, #ve-comp-tier-select, #ve-industry-select, #ve-industry-other',
             function () {
+                if ($(this).is('#ve-comp-tier-select')) {
+                    updateComplimentaryTicketLabels();
+                }
+                if ($(this).is('#ve-industry-select')) {
+                    updateIndustryOtherVisibility();
+                }
                 validateCheckoutButton();
                 updatePriceAndBreakdown();
             }
@@ -800,10 +911,19 @@
                     tickets.push(collectPersonFromAccordion($(this)));
                 });
 
+                const compTier = getSelectedComplimentaryTier();
+                if (!compTier) {
+                    showCompResult('Please select a ticket tier.', true);
+                    $btn.prop('disabled', false).text('Issue complimentary tickets');
+                    validateCheckoutButton();
+                    return;
+                }
+
                 postComplimentary({
                     action: 've_save_complimentary_registrations',
                     nonce: (window.veComplimentary && veComplimentary.nonce) || '',
                     event_id: $('#ve-event-id').val(),
+                    comp_tier: compTier.key,
                     tickets: tickets
                 }, $btn);
                 return;
@@ -845,6 +965,16 @@
                     return;
                 }
 
+                const industry = getSelectedIndustry();
+                if (!industry.valid) {
+                    alert(industry.industry === 'Other'
+                        ? 'Please specify your industry.'
+                        : 'Please select your industry.');
+                    $btn.prop('disabled', false).text(checkoutButtonLabel());
+                    validateCheckoutButton();
+                    return;
+                }
+
                 const free_tickets = [];
                 $('#free-tickets-container .ticket-accordion').each(function () {
                     free_tickets.push(collectPersonFromAccordion($(this)));
@@ -861,6 +991,8 @@
                 postCheckout(Object.assign({}, base, {
                     mode: 'special',
                     special_tier: pkg.key,
+                    industry: industry.industry,
+                    industry_other: industry.industry_other,
                     free_tickets: free_tickets,
                     tickets: tickets
                 }), $btn);

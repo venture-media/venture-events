@@ -32,6 +32,8 @@ function ve_create_tables() {
         line_type varchar(20) NOT NULL DEFAULT 'person',
         included_free tinyint(1) NOT NULL DEFAULT 0,
         special_tier_key varchar(50) DEFAULT NULL,
+        industry varchar(200) DEFAULT NULL,
+        industry_other varchar(200) DEFAULT NULL,
         status varchar(20) NOT NULL DEFAULT 'pending',
         transaction_id varchar(100) DEFAULT NULL,
         invoice_number varchar(50) DEFAULT NULL,
@@ -66,6 +68,8 @@ function ve_create_tables() {
         'line_type'          => "ALTER TABLE $table_name ADD COLUMN line_type varchar(20) NOT NULL DEFAULT 'person' AFTER price",
         'included_free'      => "ALTER TABLE $table_name ADD COLUMN included_free tinyint(1) NOT NULL DEFAULT 0 AFTER line_type",
         'special_tier_key'   => "ALTER TABLE $table_name ADD COLUMN special_tier_key varchar(50) DEFAULT NULL AFTER included_free",
+        'industry'           => "ALTER TABLE $table_name ADD COLUMN industry varchar(200) DEFAULT NULL AFTER special_tier_key",
+        'industry_other'     => "ALTER TABLE $table_name ADD COLUMN industry_other varchar(200) DEFAULT NULL AFTER industry",
         'transaction_id'     => "ALTER TABLE $table_name ADD COLUMN transaction_id varchar(100) DEFAULT NULL AFTER status",
         'invoice_number'     => "ALTER TABLE $table_name ADD COLUMN invoice_number varchar(50) DEFAULT NULL AFTER transaction_id",
         'paid_at'            => "ALTER TABLE $table_name ADD COLUMN paid_at datetime DEFAULT NULL AFTER invoice_number",
@@ -184,11 +188,52 @@ function ve_get_special_tiers($event_id) {
 }
 
 /**
+ * Complimentary ticket tiers for an event (name only, always N$ 0).
+ *
+ * @param int $event_id
+ * @return array<string,array{name:string}>
+ */
+function ve_get_complimentary_tiers($event_id) {
+    $tiers = get_post_meta((int) $event_id, '_ve_complimentary_tiers', true);
+    if (!is_array($tiers)) {
+        return [];
+    }
+    $out = [];
+    foreach ($tiers as $key => $tier) {
+        if (!is_array($tier)) {
+            continue;
+        }
+        $name = trim((string) ($tier['name'] ?? ''));
+        if ($name === '') {
+            continue;
+        }
+        $out[(string) $key] = ['name' => $name];
+    }
+    return $out;
+}
+
+/**
+ * One complimentary tier by key.
+ *
+ * @param int    $event_id
+ * @param string $key
+ * @return array{name:string}|null
+ */
+function ve_get_complimentary_tier($event_id, $key) {
+    $key   = (string) $key;
+    $tiers = ve_get_complimentary_tiers($event_id);
+    if ($key === '' || !isset($tiers[$key])) {
+        return null;
+    }
+    return $tiers[$key];
+}
+
+/**
  * One special package tier by key.
  *
  * @param int    $event_id
  * @param string $key
- * @return array{name:string,price:float,free_tickets:int,free_tier_key:string,available:int}|null
+ * @return array{name:string,price:float,free_tickets:int,free_tier_key:string,available:int,industries:array<int,string>,industry_other:bool}|null
  */
 function ve_get_special_tier($event_id, $key) {
     $key   = (string) $key;
@@ -198,13 +243,138 @@ function ve_get_special_tier($event_id, $key) {
     }
     $t = $tiers[$key];
     return [
-        'name'          => (string) ($t['name'] ?? ''),
-        'price'         => (float) ($t['price'] ?? 0),
-        'free_tickets'  => max(0, (int) ($t['free_tickets'] ?? 0)),
-        'free_tier_key' => (string) ($t['free_tier_key'] ?? ''),
+        'name'            => (string) ($t['name'] ?? ''),
+        'price'           => (float) ($t['price'] ?? 0),
+        'free_tickets'    => max(0, (int) ($t['free_tickets'] ?? 0)),
+        'free_tier_key'   => (string) ($t['free_tier_key'] ?? ''),
         // 0 = unlimited (legacy packages without a cap)
-        'available'     => max(0, (int) ($t['available'] ?? 0)),
+        'available'       => max(0, (int) ($t['available'] ?? 0)),
+        'industries'      => ve_parse_industry_lines($t['industries'] ?? []),
+        'industry_other'  => !empty($t['industry_other']),
     ];
+}
+
+/**
+ * Split a textarea or array into unique industry labels (order preserved).
+ *
+ * @param mixed $raw
+ * @return array<int,string>
+ */
+function ve_parse_industry_lines($raw) {
+    if (is_array($raw)) {
+        $lines = $raw;
+    } else {
+        $lines = preg_split('/\r\n|\r|\n/', (string) $raw) ?: [];
+    }
+
+    $out  = [];
+    $seen = [];
+    foreach ($lines as $line) {
+        $line = trim(sanitize_text_field((string) $line));
+        if ($line === '') {
+            continue;
+        }
+        $fold = strtolower($line);
+        if (isset($seen[$fold])) {
+            continue;
+        }
+        $seen[$fold] = true;
+        $out[] = $line;
+    }
+    return $out;
+}
+
+/**
+ * Whether a special package requires an industry selection.
+ *
+ * @param array|null $package
+ * @return bool
+ */
+function ve_special_package_requires_industry($package) {
+    if (!is_array($package)) {
+        return false;
+    }
+    $options = isset($package['industries']) ? ve_parse_industry_lines($package['industries']) : [];
+    return !empty($options) || !empty($package['industry_other']);
+}
+
+/**
+ * Validate industry POST for a special package. Sends JSON error on failure.
+ *
+ * @param array $package From ve_get_special_tier()
+ * @return array{industry:string,industry_other:string}
+ */
+function ve_validate_special_industry_request(array $package) {
+    $options     = ve_parse_industry_lines($package['industries'] ?? []);
+    $allow_other = !empty($package['industry_other']);
+
+    if (empty($options) && !$allow_other) {
+        return [
+            'industry'       => '',
+            'industry_other' => '',
+        ];
+    }
+
+    $raw   = sanitize_text_field(wp_unslash($_POST['industry'] ?? ''));
+    $other = sanitize_text_field(wp_unslash($_POST['industry_other'] ?? ''));
+
+    $is_other = ($raw === '__other__' || strcasecmp($raw, 'Other') === 0);
+    if ($is_other) {
+        if (!$allow_other) {
+            wp_send_json_error(['message' => 'Please select a valid industry.']);
+        }
+        if ($other === '') {
+            wp_send_json_error(['message' => 'Please specify your industry.']);
+        }
+        return [
+            'industry'       => 'Other',
+            'industry_other' => $other,
+        ];
+    }
+
+    if ($raw === '' || !in_array($raw, $options, true)) {
+        wp_send_json_error(['message' => 'Please select your industry.']);
+    }
+
+    return [
+        'industry'       => $raw,
+        'industry_other' => '',
+    ];
+}
+
+/**
+ * Industry as shown on Special lists (Other stays "Other").
+ *
+ * @param object|array|null $reg
+ * @return string
+ */
+function ve_registration_industry_admin_label($reg) {
+    if (!$reg) {
+        return '';
+    }
+    $industry = is_array($reg) ? ($reg['industry'] ?? '') : ($reg->industry ?? '');
+    return trim((string) $industry);
+}
+
+/**
+ * Industry for CSV: listed option, or "Other: …" when they specified one.
+ *
+ * @param object|array|null $reg
+ * @return string
+ */
+function ve_registration_industry_export_label($reg) {
+    if (!$reg) {
+        return '';
+    }
+    $industry = trim((string) (is_array($reg) ? ($reg['industry'] ?? '') : ($reg->industry ?? '')));
+    $other    = trim((string) (is_array($reg) ? ($reg['industry_other'] ?? '') : ($reg->industry_other ?? '')));
+    if ($industry === '') {
+        return '';
+    }
+    if (strcasecmp($industry, 'Other') === 0 && $other !== '') {
+        return 'Other: ' . $other;
+    }
+    return $industry;
 }
 
 /**
@@ -430,6 +600,21 @@ function ve_get_tier_name($event_id, $tier_key, $fallback_name = null) {
         }
     }
 
+    $comp_tiers = function_exists('ve_get_complimentary_tiers')
+        ? ve_get_complimentary_tiers((int) $event_id)
+        : [];
+    if ($tier_key !== '' && isset($comp_tiers[$tier_key]['name'])) {
+        $name = trim((string) $comp_tiers[$tier_key]['name']);
+        if ($name !== '') {
+            return $name;
+        }
+    }
+
+    // Legacy complimentary tickets issued before named tiers existed
+    if ($tier_key === VE_COMPLIMENTARY_TIER_KEY) {
+        return VE_COMPLIMENTARY_TIER_NAME;
+    }
+
     if ($fallback_name !== '') {
         return $fallback_name;
     }
@@ -621,6 +806,13 @@ function ve_handle_complimentary_registrations() {
         wp_send_json_error(['message' => 'Maximum 30 complimentary tickets per batch.']);
     }
 
+    $comp_key  = sanitize_text_field(wp_unslash($_POST['comp_tier'] ?? ''));
+    $comp_tier = ve_get_complimentary_tier($event_id, $comp_key);
+    if (!$comp_tier) {
+        wp_send_json_error(['message' => 'Please select a valid complimentary ticket tier.']);
+    }
+    $comp_name = $comp_tier['name'];
+
     $rows = [];
     foreach ($tickets as $ticket) {
         if (!is_array($ticket)) {
@@ -640,8 +832,8 @@ function ve_handle_complimentary_registrations() {
             'organisation'      => sanitize_text_field(wp_unslash($ticket['organisation'] ?? '')),
             'phone'             => sanitize_text_field(wp_unslash($ticket['phone'] ?? '')),
             'email'             => $email,
-            'tier'              => VE_COMPLIMENTARY_TIER_KEY,
-            'tier_name'         => VE_COMPLIMENTARY_TIER_NAME,
+            'tier'              => $comp_key,
+            'tier_name'         => $comp_name,
             'price'             => 0.0,
             'line_type'         => 'person',
             'included_free'     => 0,
@@ -707,7 +899,10 @@ function ve_insert_complimentary_batch(array $rows) {
             continue;
         }
 
-        if (ve_send_ticket_email($reg, (int) $reg->event_id, VE_COMPLIMENTARY_TIER_NAME)) {
+        $email_tier = function_exists('ve_registration_tier_label')
+            ? ve_registration_tier_label($reg)
+            : (string) ($reg->tier_name ?: VE_COMPLIMENTARY_TIER_NAME);
+        if (ve_send_ticket_email($reg, (int) $reg->event_id, $email_tier)) {
             $emailed++;
         }
     }
@@ -831,6 +1026,8 @@ function ve_handle_pending_special_registrations($event_id, array $billing, $row
         ]);
     }
 
+    $industry_choice = ve_validate_special_industry_request($package);
+
     $normal_tiers = ve_get_event_tiers($event_id);
     $free_count   = (int) $package['free_tickets'];
     $free_key     = $package['free_tier_key'];
@@ -874,6 +1071,8 @@ function ve_handle_pending_special_registrations($event_id, array $billing, $row
         'line_type'         => 'package',
         'included_free'     => 0,
         'special_tier_key'  => $special_key,
+        'industry'          => $industry_choice['industry'],
+        'industry_other'    => $industry_choice['industry_other'],
         'status'            => $row_status,
         'created_at'        => current_time('mysql'),
     ]);

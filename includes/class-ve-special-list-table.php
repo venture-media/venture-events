@@ -32,8 +32,8 @@ class VE_Special_List_Table extends WP_List_Table {
 
         if ($search !== '') {
             $like = '%' . $wpdb->esc_like($search) . '%';
-            $where_conditions[] = "(r.tier_name LIKE %s OR r.first_name LIKE %s OR r.organisation LIKE %s OR r.billing_company LIKE %s OR r.accounting_email LIKE %s OR r.internal_reference LIKE %s OR r.status LIKE %s)";
-            $args = array_merge($args, [$like, $like, $like, $like, $like, $like, $like]);
+            $where_conditions[] = "(r.tier_name LIKE %s OR r.first_name LIKE %s OR r.organisation LIKE %s OR r.billing_company LIKE %s OR r.accounting_email LIKE %s OR r.internal_reference LIKE %s OR r.status LIKE %s OR r.industry LIKE %s OR r.industry_other LIKE %s)";
+            $args = array_merge($args, [$like, $like, $like, $like, $like, $like, $like, $like, $like]);
         }
 
         $where = 'WHERE ' . implode(' AND ', $where_conditions);
@@ -65,6 +65,7 @@ class VE_Special_List_Table extends WP_List_Table {
         return [
             'package'            => 'Package',
             'organisation'       => 'Organisation',
+            'industry'           => 'Industry',
             'accounting_email'   => 'Accounting Email',
             'event'              => 'Event',
             'price'              => 'Price (N$)',
@@ -95,6 +96,12 @@ class VE_Special_List_Table extends WP_List_Table {
             case 'organisation':
                 $org = $item->billing_company ?: $item->organisation ?: '';
                 return esc_html($org !== '' ? $org : '—');
+
+            case 'industry':
+                $label = function_exists('ve_registration_industry_admin_label')
+                    ? ve_registration_industry_admin_label($item)
+                    : trim((string) ($item->industry ?? ''));
+                return esc_html($label !== '' ? $label : '—');
 
             case 'accounting_email':
                 $email = $item->accounting_email ?: $item->email ?: '';
