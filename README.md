@@ -9,6 +9,7 @@ WordPress plugin for event registration, payment gateways, Zoho Books invoicing,
 
 - Custom **Events** post type with configurable ticket tiers
 - Frontend registration form (`[venture_registration event_id="123"]`)
+- Purchase results charts (`[venture_registration results_id="123"]`)
 - Pluggable payment gateways (register via `ve_register_gateways`)
 - Zoho Books contacts, invoices, and customer payments
 - QR tickets emailed after successful payment

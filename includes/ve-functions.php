@@ -229,6 +229,422 @@ function ve_get_complimentary_tier($event_id, $key) {
 }
 
 /**
+ * Whether a registration is a complimentary (admin-issued) person ticket.
+ *
+ * @param object|array|null $reg
+ * @return bool
+ */
+function ve_is_complimentary_registration($reg) {
+    if (!$reg || ve_is_package_registration($reg) || !ve_is_person_registration($reg)) {
+        return false;
+    }
+
+    $special = trim((string) (is_array($reg) ? ($reg['special_tier_key'] ?? '') : ($reg->special_tier_key ?? '')));
+    if ($special !== '') {
+        return false;
+    }
+
+    $tier     = (string) (is_array($reg) ? ($reg['tier'] ?? '') : ($reg->tier ?? ''));
+    $event_id = (int) (is_array($reg) ? ($reg['event_id'] ?? 0) : ($reg->event_id ?? 0));
+
+    if (defined('VE_COMPLIMENTARY_TIER_KEY') && $tier === VE_COMPLIMENTARY_TIER_KEY) {
+        return true;
+    }
+
+    $comp = ve_get_complimentary_tiers($event_id);
+    if ($tier !== '' && isset($comp[$tier])) {
+        return true;
+    }
+
+    $price      = (float) (is_array($reg) ? ($reg['price'] ?? 0) : ($reg->price ?? 0));
+    $paid_tiers = ve_get_event_tiers($event_id);
+    if ($price == 0.0 && ($tier === '' || !isset($paid_tiers[$tier]))) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Date used for results charts: paid_at when set, otherwise created_at.
+ *
+ * @param object|array|null $reg
+ * @return string MySQL datetime or empty
+ */
+function ve_registration_purchase_datetime($reg) {
+    if (!$reg) {
+        return '';
+    }
+    $paid = (string) (is_array($reg) ? ($reg['paid_at'] ?? '') : ($reg->paid_at ?? ''));
+    if ($paid !== '' && $paid !== '0000-00-00 00:00:00') {
+        return $paid;
+    }
+    return (string) (is_array($reg) ? ($reg['created_at'] ?? '') : ($reg->created_at ?? ''));
+}
+
+/**
+ * Lighter/darker hex variants of a base colour (order: darker → lighter).
+ *
+ * @param string $hex
+ * @param int    $count
+ * @return array<int,string>
+ */
+function ve_chart_color_variants($hex, $count) {
+    $count = max(1, (int) $count);
+    $hex   = ltrim((string) $hex, '#');
+    if (!preg_match('/^[0-9a-fA-F]{6}$/', $hex)) {
+        $hex = '7a7a7a';
+    }
+
+    $r = hexdec(substr($hex, 0, 2));
+    $g = hexdec(substr($hex, 2, 2));
+    $b = hexdec(substr($hex, 4, 2));
+
+    if ($count === 1) {
+        return ['#' . strtolower($hex)];
+    }
+
+    $out = [];
+    for ($i = 0; $i < $count; $i++) {
+        $t = -0.34 + (0.72 * $i / ($count - 1));
+        if ($t < 0) {
+            $f  = 1 + $t;
+            $rr = (int) round($r * $f);
+            $gg = (int) round($g * $f);
+            $bb = (int) round($b * $f);
+        } else {
+            $rr = (int) round($r + ((255 - $r) * $t));
+            $gg = (int) round($g + ((255 - $g) * $t));
+            $bb = (int) round($b + ((255 - $b) * $t));
+        }
+        $out[] = sprintf('#%02x%02x%02x', max(0, min(255, $rr)), max(0, min(255, $gg)), max(0, min(255, $bb)));
+    }
+    return $out;
+}
+
+/**
+ * Month keys from first to last inclusive (Y-m).
+ *
+ * @param string $min_ym
+ * @param string $max_ym
+ * @return array<int,string>
+ */
+function ve_results_month_range($min_ym, $max_ym) {
+    $min_ym = (string) $min_ym;
+    $max_ym = (string) $max_ym;
+    if (!preg_match('/^\d{4}-\d{2}$/', $min_ym) || !preg_match('/^\d{4}-\d{2}$/', $max_ym)) {
+        return [];
+    }
+    if ($min_ym > $max_ym) {
+        $tmp    = $min_ym;
+        $min_ym = $max_ym;
+        $max_ym = $tmp;
+    }
+
+    $start = DateTime::createFromFormat('Y-m-d', $min_ym . '-01');
+    $end   = DateTime::createFromFormat('Y-m-d', $max_ym . '-01');
+    if (!$start || !$end) {
+        return [];
+    }
+
+    $out    = [];
+    $cursor = clone $start;
+    while ($cursor <= $end) {
+        $out[] = $cursor->format('Y-m');
+        $cursor->modify('+1 month');
+        if (count($out) > 120) {
+            break;
+        }
+    }
+    return $out;
+}
+
+/**
+ * Package counts per industry for the results bar chart.
+ *
+ * Configured industry order first, then any extra labels (Other, Unspecified).
+ * Write-in “Other” values are grouped as a single Other bar.
+ * Only industries with at least one issued package are included.
+ *
+ * @param array<string,mixed> $pkg_cfg
+ * @param array<string,int>   $counts
+ * @return array<int,array{label:string,count:int}>
+ */
+function ve_results_industry_bars($pkg_cfg, $counts) {
+    if (!is_array($counts) || empty($counts)) {
+        return [];
+    }
+
+    $ordered = [];
+    if (is_array($pkg_cfg)) {
+        foreach ($pkg_cfg as $tier) {
+            if (!is_array($tier)) {
+                continue;
+            }
+            $lines = function_exists('ve_parse_industry_lines')
+                ? ve_parse_industry_lines($tier['industries'] ?? [])
+                : [];
+            foreach ($lines as $name) {
+                if ($name === '' || isset($ordered[$name])) {
+                    continue;
+                }
+                $ordered[$name] = true;
+            }
+        }
+    }
+
+    $out = [];
+    foreach (array_keys($ordered) as $name) {
+        $n = (int) ($counts[$name] ?? 0);
+        if ($n > 0) {
+            $out[] = ['label' => $name, 'count' => $n];
+        }
+    }
+    foreach ($counts as $name => $n) {
+        $n = (int) $n;
+        if ($n < 1 || isset($ordered[$name])) {
+            continue;
+        }
+        $out[] = ['label' => (string) $name, 'count' => $n];
+    }
+    return $out;
+}
+
+/**
+ * Chart payload for [venture_registration results_id="…"].
+ *
+ * Counts issued rows (paid + EFT). Tickets exclude complimentary and
+ * package-included free guests. Extra paid tickets on a package count as tickets.
+ *
+ * @param int $event_id
+ * @return array<string,mixed>
+ */
+function ve_get_event_results_chart_data($event_id) {
+    global $wpdb;
+
+    $event_id = (int) $event_id;
+    $empty    = [
+        'event_id'     => $event_id,
+        'event_title'  => $event_id ? (string) get_the_title($event_id) : '',
+        'months'       => [],
+        'month_labels' => [],
+        'sets'         => [],
+    ];
+
+    if ($event_id < 1) {
+        return $empty;
+    }
+
+    $table = $wpdb->prefix . 've_registrations';
+    $rows  = $wpdb->get_results($wpdb->prepare(
+        "SELECT event_id, line_type, included_free, special_tier_key, tier, tier_name, price, status, paid_at, created_at, payment_reference, industry, industry_other
+         FROM $table
+         WHERE event_id = %d AND status IN ('paid', 'eft')",
+        $event_id
+    ));
+    if (!is_array($rows)) {
+        $rows = [];
+    }
+
+    $ticket_cfg = ve_get_event_tiers($event_id);
+    $pkg_cfg    = ve_get_special_tiers($event_id);
+    $comp_cfg   = ve_get_complimentary_tiers($event_id);
+
+    $sets_meta = [
+        'tickets' => [
+            'id'    => 'tickets',
+            'title' => 'Tickets',
+            'color' => '#d1d741',
+            'empty' => 'No ticket purchases yet.',
+        ],
+        'packages' => [
+            'id'    => 'packages',
+            'title' => 'Packages',
+            'color' => '#f88c00',
+            'empty' => 'No package purchases yet.',
+        ],
+        'complimentary' => [
+            'id'    => 'complimentary',
+            'title' => 'Complimentary tickets',
+            'color' => '#7a7a7a',
+            'empty' => 'No complimentary tickets issued yet.',
+        ],
+    ];
+
+    $monthly = [
+        'tickets'       => [],
+        'packages'      => [],
+        'complimentary' => [],
+    ];
+    $tier_counts = [
+        'tickets'       => [],
+        'packages'      => [],
+        'complimentary' => [],
+    ];
+    $tier_labels = [
+        'tickets'       => [],
+        'packages'      => [],
+        'complimentary' => [],
+    ];
+    $revenue = [
+        'tickets'       => 0.0,
+        'packages'      => 0.0,
+        'complimentary' => 0.0,
+    ];
+    $industry_counts = [];
+    $min_ym          = '';
+    $max_ym          = '';
+
+    foreach ($rows as $row) {
+        $when = ve_registration_purchase_datetime($row);
+        $ym   = preg_match('/^\d{4}-\d{2}/', $when) ? substr($when, 0, 7) : '';
+
+        $line     = (string) ($row->line_type ?? 'person');
+        $included = !empty($row->included_free);
+        $set_id   = '';
+
+        if ($line === 'package') {
+            $set_id = 'packages';
+        } elseif ($included) {
+            continue;
+        } elseif (ve_is_complimentary_registration($row)) {
+            $set_id = 'complimentary';
+        } elseif (ve_is_person_registration($row)) {
+            $set_id = 'tickets';
+        } else {
+            continue;
+        }
+
+        if ($ym !== '') {
+            if (!isset($monthly[$set_id][$ym])) {
+                $monthly[$set_id][$ym] = 0;
+            }
+            $monthly[$set_id][$ym]++;
+            if ($min_ym === '' || $ym < $min_ym) {
+                $min_ym = $ym;
+            }
+            if ($max_ym === '' || $ym > $max_ym) {
+                $max_ym = $ym;
+            }
+        }
+
+        $tier_key = (string) ($row->tier ?? '');
+        if ($tier_key === '') {
+            $tier_key = '_unknown';
+        }
+        if (!isset($tier_counts[$set_id][$tier_key])) {
+            $tier_counts[$set_id][$tier_key] = 0;
+        }
+        $tier_counts[$set_id][$tier_key]++;
+
+        if (!isset($tier_labels[$set_id][$tier_key])) {
+            $tier_labels[$set_id][$tier_key] = ve_registration_tier_label($row);
+        }
+
+        $revenue[$set_id] += (float) ($row->price ?? 0);
+
+        if ($set_id === 'packages') {
+            $ind_label = function_exists('ve_registration_industry_admin_label')
+                ? ve_registration_industry_admin_label($row)
+                : trim((string) ($row->industry ?? ''));
+            if ($ind_label === '__other__' || strcasecmp($ind_label, 'Other') === 0) {
+                $ind_label = 'Other';
+            } elseif ($ind_label === '') {
+                $ind_label = 'Unspecified';
+            }
+            if (!isset($industry_counts[$ind_label])) {
+                $industry_counts[$ind_label] = 0;
+            }
+            $industry_counts[$ind_label]++;
+        }
+    }
+
+    $months = ve_results_month_range($min_ym, $max_ym);
+    $labels = [];
+    foreach ($months as $ym) {
+        $ts       = strtotime($ym . '-01 00:00:00');
+        $labels[] = $ts ? date_i18n('M Y', $ts) : $ym;
+    }
+
+    $cfg_for = [
+        'tickets'       => $ticket_cfg,
+        'packages'      => $pkg_cfg,
+        'complimentary' => $comp_cfg,
+    ];
+
+    $sets = [];
+    foreach ($sets_meta as $set_id => $meta) {
+        $series = [];
+        foreach ($months as $ym) {
+            $series[] = (int) ($monthly[$set_id][$ym] ?? 0);
+        }
+
+        $ordered_keys = [];
+        foreach (array_keys($cfg_for[$set_id]) as $key) {
+            $key = (string) $key;
+            if ((int) ($tier_counts[$set_id][$key] ?? 0) > 0) {
+                $ordered_keys[] = $key;
+            }
+        }
+        foreach ($tier_counts[$set_id] as $key => $count) {
+            if ($count > 0 && !in_array((string) $key, $ordered_keys, true)) {
+                $ordered_keys[] = (string) $key;
+            }
+        }
+
+        $tier_slices = [];
+        $n           = count($ordered_keys);
+        $colors      = ve_chart_color_variants($meta['color'], max(1, $n));
+        foreach ($ordered_keys as $i => $key) {
+            $count = (int) $tier_counts[$set_id][$key];
+            if ($count < 1) {
+                continue;
+            }
+            $label = $tier_labels[$set_id][$key] ?? '';
+            if ($label === '' && isset($cfg_for[$set_id][$key]['name'])) {
+                $label = (string) $cfg_for[$set_id][$key]['name'];
+            }
+            if ($label === '') {
+                $label = $key === '_unknown' ? 'Unknown' : $key;
+            }
+            $tier_slices[] = [
+                'key'   => $key,
+                'label' => $label,
+                'count' => $count,
+                'color' => $colors[$i] ?? $meta['color'],
+            ];
+        }
+
+        $set_revenue = round((float) $revenue[$set_id], 2);
+        $set_row     = [
+            'id'            => $meta['id'],
+            'title'         => $meta['title'],
+            'color'         => $meta['color'],
+            'empty'         => $meta['empty'],
+            'total'         => (int) array_sum($tier_counts[$set_id]),
+            'revenue'       => $set_revenue,
+            'revenue_label' => 'N$ ' . number_format($set_revenue, 2),
+            'monthly'       => $series,
+            'tiers'         => $tier_slices,
+        ];
+
+        if ($set_id === 'packages') {
+            $set_row['industries'] = ve_results_industry_bars($pkg_cfg, $industry_counts);
+        }
+
+        $sets[] = $set_row;
+    }
+
+    return [
+        'event_id'     => $event_id,
+        'event_title'  => (string) get_the_title($event_id),
+        'months'       => $months,
+        'month_labels' => $labels,
+        'sets'         => $sets,
+    ];
+}
+
+/**
  * One special package tier by key.
  *
  * @param int    $event_id

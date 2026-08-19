@@ -666,3 +666,124 @@
 	padding: 14px 16px;
 	text-align: left;
 }
+
+/* —— Results charts ([venture_registration results_id="…"]) —— */
+.venture-events-results {
+	--ve-primary: #f4a239;
+	--ve-accent: #d1d741;
+	--ve-text: #221f21;
+	--ve-secondary: #7a7a7a;
+	--ve-surface: #ffffff;
+	--ve-surface-soft: #f7f5f0;
+	--ve-border: #d4d0c8;
+	--ve-font: "Effra", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--ve-weight-normal: 300;
+	--ve-weight-emphasis: 400;
+
+	max-width: 960px;
+	margin: 0 auto;
+	padding: 8px 0 32px;
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
+	line-height: 1.5;
+	box-sizing: border-box;
+	-webkit-font-smoothing: antialiased;
+}
+
+.venture-events-results *,
+.venture-events-results *::before,
+.venture-events-results *::after {
+	box-sizing: border-box;
+}
+
+.venture-events-results .ve-results-json {
+	display: none;
+}
+
+.venture-events-results .ve-results-set {
+	margin: 0 0 2.25em;
+}
+
+.venture-events-results .ve-results-heading {
+	display: flex;
+	align-items: baseline;
+	gap: 0.6em;
+	margin: 0;
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-emphasis);
+	font-size: 1.25em;
+	letter-spacing: 0.02em;
+	line-height: 1.2;
+}
+
+.venture-events-results .ve-results-total {
+	color: var(--ve-secondary);
+	font-weight: var(--ve-weight-normal);
+	font-size: 0.78em;
+	letter-spacing: 0.01em;
+}
+
+.venture-events-results .ve-results-revenue {
+	margin: 0.35em 0 0.85em;
+	color: var(--ve-text);
+	font-family: var(--ve-font);
+	font-weight: var(--ve-weight-normal);
+	font-size: 1em;
+	letter-spacing: 0.01em;
+}
+
+.venture-events-results .ve-results-row {
+	display: flex;
+	gap: 24px;
+	align-items: stretch;
+}
+
+.venture-events-results .ve-results-bar-wrap {
+	flex: 1 1 64%;
+	min-width: 0;
+}
+
+.venture-events-results .ve-results-doughnut-wrap {
+	flex: 0 0 280px;
+	width: 280px;
+	max-width: 100%;
+}
+
+.venture-events-results .ve-results-chart {
+	position: relative;
+	height: 200px;
+	width: 100%;
+}
+
+.venture-events-results .ve-results-industry-wrap {
+	margin-top: 20px;
+	width: 100%;
+}
+
+.venture-events-results .ve-results-empty {
+	margin: 0;
+	min-height: 200px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	color: var(--ve-secondary);
+	background: var(--ve-surface-soft);
+	border: 1px solid var(--ve-border);
+	text-align: center;
+	font-size: 0.95em;
+}
+
+@media (max-width: 700px) {
+	.venture-events-results .ve-results-row {
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	.venture-events-results .ve-results-doughnut-wrap {
+		flex: none;
+		width: 100%;
+	}
+}

@@ -3,7 +3,7 @@
  * Plugin Name:       Venture Events
  * Plugin URI:        https://github.com/venture-media/venture-events
  * Description:       Event registration with flexible payment gateways + Zoho Books invoicing + QR tickets.
- * Version:           0.9.24.0
+ * Version:           0.9.26.0
  * Author:            Leon de Klerk
  * Author URI:        https://github.com/Leon2332
  * License:           MIT
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('VE_VERSION', '0.9.24.0');
+define('VE_VERSION', '0.9.26.0');
 define('VE_PATH', plugin_dir_path(__FILE__));
 define('VE_URL', plugin_dir_url(__FILE__));
 
@@ -110,9 +110,19 @@ function ve_register_cpt() {
 // Shortcode for registration form
 // Normal:  [venture_registration event_id="123"]
 // Special: [venture_registration event_id="S123"]
+// Results: [venture_registration results_id="123"]
 add_shortcode('venture_registration', 've_registration_form_shortcode');
 function ve_registration_form_shortcode($atts) {
-    $atts = shortcode_atts(['event_id' => ''], $atts, 'venture_registration');
+    $atts = shortcode_atts([
+        'event_id'   => '',
+        'results_id' => '',
+    ], $atts, 'venture_registration');
+
+    $results_id = absint($atts['results_id']);
+    if ($results_id) {
+        return ve_registration_results_shortcode($results_id);
+    }
+
     $parsed   = ve_parse_registration_event_attr($atts['event_id']);
     $event_id = (int) $parsed['event_id'];
     $mode     = $parsed['mode'];
@@ -151,6 +161,100 @@ function ve_registration_form_shortcode($atts) {
 
     return ob_get_clean();
 }
+
+/**
+ * Purchase results charts: [venture_registration results_id="123"]
+ *
+ * @param int $event_id
+ * @return string
+ */
+function ve_registration_results_shortcode($event_id) {
+    $event_id = (int) $event_id;
+
+    ve_enqueue_results_assets(true);
+
+    if (!$event_id) {
+        return '<p class="ve-error">Error: Provide results_id, e.g. [venture_registration results_id="123"].</p>';
+    }
+
+    if (get_post_type($event_id) !== 've_event') {
+        return '<p class="ve-error">Error: Event not found.</p>';
+    }
+
+    $ve_results = function_exists('ve_get_event_results_chart_data')
+        ? ve_get_event_results_chart_data($event_id)
+        : [];
+
+    static $instance = 0;
+    $instance++;
+    $ve_results_uid = 've-results-' . $instance;
+
+    ob_start();
+    $template = VE_PATH . 'templates/registration-results.php';
+    if (file_exists($template)) {
+        include $template;
+    } else {
+        echo '<p class="ve-error">Error: Results template missing.</p>';
+    }
+    return ob_get_clean();
+}
+
+/**
+ * Chart.js + results CSS/JS for the results shortcode.
+ *
+ * @param bool $force
+ */
+function ve_enqueue_results_assets($force = false) {
+    static $done = false;
+
+    $content = is_singular() ? (get_post()->post_content ?? '') : '';
+    $should_load = $force
+        || ($content !== ''
+            && has_shortcode($content, 'venture_registration')
+            && preg_match('/\[venture_registration[^\]]*results_id\s*=/i', $content));
+
+    if (!$should_load) {
+        return;
+    }
+
+    if (!$done) {
+        wp_register_style(
+            'venture-events-frontend',
+            VE_URL . 'assets/frontend.css',
+            [],
+            VE_VERSION
+        );
+
+        wp_register_script(
+            'chartjs',
+            VE_URL . 'assets/chart.umd.min.js',
+            [],
+            '4.4.9',
+            true
+        );
+
+        wp_register_script(
+            'venture-events-results',
+            VE_URL . 'assets/results.js',
+            ['chartjs'],
+            VE_VERSION,
+            true
+        );
+
+        $done = true;
+    }
+
+    wp_enqueue_style('venture-events-frontend');
+    wp_enqueue_script('chartjs');
+    wp_enqueue_script('venture-events-results');
+
+    if (did_action('wp_enqueue_scripts') && !doing_action('wp_enqueue_scripts')) {
+        if (wp_style_is('venture-events-frontend', 'enqueued') && !wp_style_is('venture-events-frontend', 'done')) {
+            wp_print_styles('venture-events-frontend');
+        }
+    }
+}
+add_action('wp_enqueue_scripts', 've_enqueue_results_assets');
 
 // Complimentary tickets (admin only): [venture_complimentary event_id="123"]
 add_shortcode('venture_complimentary', 've_complimentary_form_shortcode');
@@ -394,7 +498,8 @@ function ve_enqueue_registration_assets($force = false) {
     $content = is_singular() ? (get_post()->post_content ?? '') : '';
     $should_load = $force
         || ($content !== '' && (
-            has_shortcode($content, 'venture_registration')
+            (has_shortcode($content, 'venture_registration')
+                && preg_match('/\[venture_registration[^\]]*event_id\s*=/i', $content))
             || has_shortcode($content, 'venture_complimentary')
             || has_shortcode($content, 'venture_eft')
         ));

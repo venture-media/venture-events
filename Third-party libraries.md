@@ -14,3 +14,11 @@ This library is included unchanged and remains under its original license.
 - Source: https://github.com/mebjas/html5-qrcode
 
 Used by the gate scanner shortcode for in-browser QR reading (iOS Safari + Android Chrome).
+
+### Chart.js
+- License: MIT
+- Location: /assets/chart.umd.min.js
+- Version: 4.4.9
+- Source: https://github.com/chartjs/Chart.js
+
+Used by the results shortcode (`[venture_registration results_id="123"]`) for monthly bar charts and tier doughnuts.

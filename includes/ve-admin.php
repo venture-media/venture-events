@@ -90,6 +90,12 @@ function ve_event_list_column_content($column, $post_id) {
         esc_html($normal)
     );
 
+    $results = sprintf('[venture_registration results_id="%d"]', $id);
+    printf(
+        '<div style="margin-top:4px;"><code class="ve-event-shortcode" style="user-select:all;cursor:text;white-space:nowrap;">%s</code> <span style="color:#646970;">results</span></div>',
+        esc_html($results)
+    );
+
     $special_tiers = function_exists('ve_get_special_tiers')
         ? ve_get_special_tiers($id)
         : (get_post_meta($id, '_ve_special_tiers', true) ?: []);
