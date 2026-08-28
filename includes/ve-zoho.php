@@ -1127,7 +1127,7 @@ function ve_generate_zoho_invoice($reg, $event_id, $contact_id = null, $mode = '
     $event_title = get_the_title($event_id);
 
     // Line-item Account (⋯ → Show additional information → account dropdown, often "Sales")
-    $line_account_id = ve_zoho_resolve_line_account_id($token, $org_id);
+    $line_account_id = ve_zoho_resolve_line_account_id($token, $org_id, $event_id);
 
     // Multi-ticket support
     $is_multi = isset($reg->line_items) && is_array($reg->line_items);
@@ -1536,15 +1536,31 @@ function ve_zoho_build_line_rate_and_tax($inclusive_price, $is_namibia) {
  * This is the dropdown under each line: ⋯ → Show additional information →
  * the field that often defaults to "Sales" (income account — not P.O.# / Ref#).
  *
- * Setting: ve_zoho_line_account_name (exact or case-insensitive account name)
- * Optional override: ve_zoho_line_account_id (if set, used as-is)
+ * Priority:
+ * 1. Event post meta `_ve_zoho_line_account_id` (per-event)
+ * 2. Settings override `ve_zoho_line_account_id`
+ * 3. Settings name `ve_zoho_line_account_name` (looked up in chart of accounts)
  *
+ * @param string $token    Zoho OAuth access token.
+ * @param string $org_id   Zoho organization ID.
+ * @param int    $event_id Optional ve_event post ID.
  * @return string|null account_id
  */
-function ve_zoho_resolve_line_account_id($token, $org_id) {
+function ve_zoho_resolve_line_account_id($token, $org_id, $event_id = 0) {
+    $event_id = (int) $event_id;
+    if ($event_id > 0) {
+        $event_account_id = trim((string) get_post_meta($event_id, '_ve_zoho_line_account_id', true));
+        if ($event_account_id !== '') {
+            error_log(
+                "Venture Events Zoho: Using event #{$event_id} line account_id={$event_account_id}"
+            );
+            return $event_account_id;
+        }
+    }
+
     $direct_id = trim((string) get_option('ve_zoho_line_account_id', ''));
     if ($direct_id !== '') {
-        error_log("Venture Events Zoho: Using configured line account_id={$direct_id}");
+        error_log("Venture Events Zoho: Using fallback settings line account_id={$direct_id}");
         return $direct_id;
     }
 
@@ -1876,8 +1892,9 @@ function ve_zoho_permission_self_check() {
 
     $acct_name = trim((string) get_option('ve_zoho_line_account_name', ''));
     $acct_id   = trim((string) get_option('ve_zoho_line_account_id', ''));
-    $lines[]   = 'Line item account name: ' . ($acct_name !== '' ? $acct_name : '(not set — Zoho default, usually Sales)');
-    $lines[]   = 'Line item account_id override: ' . ($acct_id !== '' ? $acct_id : '(not set)');
+    $lines[]   = 'Fallback line item account name: ' . ($acct_name !== '' ? $acct_name : '(not set — Zoho default, usually Sales)');
+    $lines[]   = 'Fallback line item account_id: ' . ($acct_id !== '' ? $acct_id : '(not set)');
+    $lines[]   = 'Per-event account IDs (event editor) override these fallbacks.';
     $lines[]   = '';
 
     foreach ($probes as $label => $path) {

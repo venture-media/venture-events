@@ -512,6 +512,58 @@ function ve_save_special_tiers_meta($post_id) {
     update_post_meta($post_id, '_ve_special_tiers', $special);
 }
 
+// ====================== ZOHO LINE ITEM ACCOUNT META BOX ======================
+add_action('add_meta_boxes', 've_add_zoho_line_account_meta_box');
+function ve_add_zoho_line_account_meta_box() {
+    add_meta_box(
+        've_zoho_line_account_meta',
+        'Zoho line item account',
+        've_zoho_line_account_meta_box_html',
+        've_event',
+        'side',
+        'high'
+    );
+}
+
+function ve_zoho_line_account_meta_box_html($post) {
+    $account_id = (string) get_post_meta($post->ID, '_ve_zoho_line_account_id', true);
+    wp_nonce_field('ve_save_zoho_line_account', 've_zoho_line_account_nonce');
+    ?>
+    <p>
+        <label for="ve_zoho_line_account_id"><strong>Account ID</strong></label><br>
+        <input type="text" id="ve_zoho_line_account_id" name="ve_zoho_line_account_id"
+               value="<?php echo esc_attr($account_id); ?>" class="widefat"
+               placeholder="Zoho account_id">
+    </p>
+    <p class="description" style="margin:0;">
+        Chart of Accounts ID used on invoice line items for this event
+        (⋯ → Show additional information → account). Leave blank to use the
+        fallback on <strong>Tickets → Settings</strong>.
+    </p>
+    <?php
+}
+
+add_action('save_post_ve_event', 've_save_zoho_line_account_meta', 15);
+function ve_save_zoho_line_account_meta($post_id) {
+    if (!isset($_POST['ve_zoho_line_account_nonce']) || !wp_verify_nonce($_POST['ve_zoho_line_account_nonce'], 've_save_zoho_line_account')) {
+        return;
+    }
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+        return;
+    }
+    if (!current_user_can('edit_post', $post_id)) {
+        return;
+    }
+
+    $account_id = sanitize_text_field(wp_unslash($_POST['ve_zoho_line_account_id'] ?? ''));
+    $account_id = trim($account_id);
+    if ($account_id === '') {
+        delete_post_meta($post_id, '_ve_zoho_line_account_id');
+        return;
+    }
+    update_post_meta($post_id, '_ve_zoho_line_account_id', $account_id);
+}
+
 // ====================== COMPLIMENTARY TICKET TIERS META BOX ======================
 add_action('add_meta_boxes', 've_add_complimentary_tiers_meta_box');
 function ve_add_complimentary_tiers_meta_box() {
@@ -1289,7 +1341,7 @@ function ve_settings_page() {
         update_option('ve_zoho_payment_mode', sanitize_text_field($_POST['payment_mode'] ?? 'banktransfer'));
         update_option('ve_zoho_api_base', esc_url_raw($_POST['api_base'] ?? 'https://www.zohoapis.com'));
         update_option('ve_zoho_accounts_base', esc_url_raw($_POST['accounts_base'] ?? 'https://accounts.zoho.com'));
-        // Line item Account (⋯ → Show additional information → account dropdown, e.g. "Sales")
+        // Fallback line item Account (used when an event has no _ve_zoho_line_account_id)
         update_option('ve_zoho_line_account_name', sanitize_text_field($_POST['line_account_name'] ?? ''));
         update_option('ve_zoho_line_account_id', sanitize_text_field($_POST['line_account_id'] ?? ''));
         update_option('ve_zoho_tax_id_domestic', sanitize_text_field($_POST['tax_id_domestic'] ?? ''));
@@ -1424,12 +1476,16 @@ function ve_settings_page() {
                     </td>
                 </tr>
                 <tr>
-                    <th>Line item account</th>
+                    <th>Line item account (fallback)</th>
                     <td>
                         <input type="text" name="line_account_name" value="<?php echo esc_attr(get_option('ve_zoho_line_account_name', '')); ?>" size="40" placeholder="e.g. Sales">
                         <p style="margin-top:8px;">
                             <label>Or paste Account ID (optional override):</label><br>
                             <input type="text" name="line_account_id" value="<?php echo esc_attr(get_option('ve_zoho_line_account_id', '')); ?>" size="40" placeholder="Zoho account_id">
+                        </p>
+                        <p class="description">
+                            Used only when an event does not have its own line item account ID set
+                            in the event editor. Prefer setting the ID on each event.
                         </p>
                     </td>
                 </tr>

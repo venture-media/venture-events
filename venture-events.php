@@ -3,7 +3,7 @@
  * Plugin Name:       Venture Events
  * Plugin URI:        https://github.com/venture-media/venture-events
  * Description:       Event registration with flexible payment gateways + Zoho Books invoicing + QR tickets.
- * Version:           0.9.26.0
+ * Version:           0.9.27.0
  * Author:            Leon de Klerk
  * Author URI:        https://github.com/Leon2332
  * License:           MIT
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('VE_VERSION', '0.9.26.0');
+define('VE_VERSION', '0.9.27.0');
 define('VE_PATH', plugin_dir_path(__FILE__));
 define('VE_URL', plugin_dir_url(__FILE__));
 

@@ -25,7 +25,7 @@ WordPress plugin for event registration, payment gateways, Zoho Books invoicing,
 
 1. Install and activate **Venture Events**.
 2. Create an event, set tiers and prices, place the shortcode on a page.
-3. Configure **Events → Settings**: Zoho client ID/secret, refresh token, org ID, optional tax/salesperson/line-account IDs, ticket From address.
+3. Configure **Tickets → Settings**: Zoho client ID/secret, refresh token, org ID, optional tax/salesperson/line-account IDs, ticket From address. Set a per-event line item account ID on the event editor (settings values are the fallback).
 4. Activate and configure a payment gateway plugin that hooks into Venture Events.
 
 ## License
